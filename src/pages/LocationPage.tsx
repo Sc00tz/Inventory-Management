@@ -1,4 +1,4 @@
-import { useState, Fragment, useCallback, useEffect, useRef } from 'react'
+import { useState, Fragment, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, useNavigate } from '@tanstack/react-router'
 import { ArrowLeft, Plus, Minus, Trash2, Edit2, ScanBarcode, Package, QrCode, Copy, Check, ChevronRight, Box, Home, Layers } from 'lucide-react'
@@ -187,10 +187,10 @@ export function LocationPage() {
   const handleNewProduct = async (name: string, brand: string, barcode: string) => {
     try {
       const product = await createProduct({ barcode, name, brand: brand || null, imageUrl: null })
+      // adjustMutation.onSuccess already calls invalidateInventory — no manual invalidate needed
       await adjustMutation.mutateAsync({ productId: product.id, delta: 1 })
       toast.success(`+1 ${product.name}`)
       setPendingScan(null)
-      queryClient.invalidateQueries({ queryKey: ['inventory', id] })
     } catch {
       toast.error('Failed to add product')
     }
@@ -454,6 +454,12 @@ function InventoryRow({ item, onAdjust, onSetQty, onRemove }: InventoryRowProps)
   const [editing, setEditing] = useState(false)
   const [editVal, setEditVal] = useState(String(item.quantity))
 
+  // Keep editVal in sync when quantity changes externally (e.g. another scan
+  // updates this row while it isn't being actively edited)
+  useEffect(() => {
+    if (!editing) setEditVal(String(item.quantity))
+  }, [item.quantity, editing])
+
   const commitEdit = () => {
     const n = parseFloat(editVal)
     if (!isNaN(n) && n >= 0) onSetQty(n)
@@ -461,9 +467,10 @@ function InventoryRow({ item, onAdjust, onSetQty, onRemove }: InventoryRowProps)
   }
 
   // Display whole numbers without a decimal point, keep decimals for fractional quantities
-  const displayQty = Number(item.quantity) % 1 === 0
-    ? Math.floor(Number(item.quantity))
-    : item.quantity
+  const displayQty = useMemo(() =>
+    Number(item.quantity) % 1 === 0 ? Math.floor(Number(item.quantity)) : item.quantity,
+    [item.quantity]
+  )
 
   return (
     <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors group">

@@ -28,12 +28,8 @@ export function getLocationByShortId(shortId: string): Promise<Location | null> 
   return req<Location>('GET', `/locations/short/${shortId}`).catch(() => null)
 }
 
-// Client-side barcode lookup — fetches all locations then filters locally.
-// Fine for home-scale data; replace with a server-side endpoint if the
-// location count ever grows large.
-export async function getLocationByBarcode(barcode: string): Promise<Location | null> {
-  const locations = await getLocations()
-  return locations.find(l => l.barcode === barcode) ?? null
+export function getLocationByBarcode(barcode: string): Promise<Location | null> {
+  return req<Location>('GET', `/locations/barcode/${encodeURIComponent(barcode)}`).catch(() => null)
 }
 
 export function createLocation(data: Omit<Location, 'id' | 'createdAt' | 'updatedAt'>): Promise<Location> {

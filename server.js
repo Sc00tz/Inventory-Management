@@ -20,6 +20,7 @@ const db = new DatabaseSync(DB_PATH)
 
 db.exec(`
   PRAGMA journal_mode = WAL;
+  PRAGMA foreign_keys = ON;
 
   CREATE TABLE IF NOT EXISTS locations (
     id          TEXT PRIMARY KEY,
@@ -57,7 +58,20 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_inventory_locationId ON inventory(locationId);
   CREATE INDEX IF NOT EXISTS idx_inventory_productId  ON inventory(productId);
   CREATE INDEX IF NOT EXISTS idx_locations_parentId   ON locations(parentId);
+  CREATE INDEX IF NOT EXISTS idx_locations_barcode    ON locations(barcode);
 `)
+
+// ── Validation helpers ────────────────────────────────────────────────────────
+
+function requireStrings(res, obj, fields) {
+  for (const field of fields) {
+    if (typeof obj[field] !== 'string' || !obj[field].trim()) {
+      res.status(400).json({ error: `${field} is required` })
+      return false
+    }
+  }
+  return true
+}
 
 // ── QR code ───────────────────────────────────────────────────────────────────
 
@@ -109,6 +123,12 @@ app.get('/api/locations', (req, res) => {
   res.json(db.prepare('SELECT * FROM locations ORDER BY name ASC').all())
 })
 
+app.get('/api/locations/barcode/:barcode', (req, res) => {
+  const row = db.prepare('SELECT * FROM locations WHERE barcode = ?').get(req.params.barcode)
+  if (!row) return res.status(404).json({ error: 'Not found' })
+  res.json(row)
+})
+
 app.get('/api/locations/:id', (req, res) => {
   const row = db.prepare('SELECT * FROM locations WHERE id = ?').get(req.params.id)
   if (!row) return res.status(404).json({ error: 'Not found' })
@@ -116,6 +136,7 @@ app.get('/api/locations/:id', (req, res) => {
 })
 
 app.post('/api/locations', (req, res) => {
+  if (!requireStrings(res, req.body, ['name', 'type', 'color'])) return
   try {
     const { name, type, barcode, description, color, parentId } = req.body
     const id = randomUUID()
@@ -133,6 +154,7 @@ app.post('/api/locations', (req, res) => {
 })
 
 app.put('/api/locations/:id', (req, res) => {
+  if (!requireStrings(res, req.body, ['name', 'type', 'color'])) return
   try {
     const existing = db.prepare('SELECT id FROM locations WHERE id = ?').get(req.params.id)
     if (!existing) return res.status(404).json({ error: 'Not found' })
@@ -152,13 +174,14 @@ app.put('/api/locations/:id', (req, res) => {
   }
 })
 
-// Recursively deletes a location, all its descendants, and their inventory rows
-function deleteLocationCascade(id) {
+// Recursively deletes a location, all its descendants, and their inventory rows,
+// wrapped in a transaction so a mid-cascade crash can't leave orphaned data.
+const deleteLocationCascade = db.transaction((id) => {
   const children = db.prepare('SELECT id FROM locations WHERE parentId = ?').all(id)
   for (const child of children) deleteLocationCascade(child.id)
   db.prepare('DELETE FROM inventory WHERE locationId = ?').run(id)
   db.prepare('DELETE FROM locations WHERE id = ?').run(id)
-}
+})
 
 app.delete('/api/locations/:id', (req, res) => {
   try {
@@ -182,6 +205,7 @@ app.get('/api/products/barcode/:barcode', (req, res) => {
 })
 
 app.post('/api/products', (req, res) => {
+  if (!requireStrings(res, req.body, ['barcode', 'name'])) return
   try {
     const { barcode, name, brand, imageUrl } = req.body
     const id = randomUUID()
@@ -199,6 +223,7 @@ app.post('/api/products', (req, res) => {
 })
 
 app.put('/api/products/:id', (req, res) => {
+  if (!requireStrings(res, req.body, ['name'])) return
   try {
     const existing = db.prepare('SELECT id FROM products WHERE id = ?').get(req.params.id)
     if (!existing) return res.status(404).json({ error: 'Not found' })
@@ -226,7 +251,7 @@ app.delete('/api/products/:id', (req, res) => {
 // ── Inventory counts ──────────────────────────────────────────────────────────
 
 // Returns { [locationId]: count } for all locations in one query,
-// used by the home page to avoid an N+1 fetch per location.
+// used by the home page tree to display per-location counts without N+1 fetches.
 app.get('/api/inventory-counts', (req, res) => {
   const rows = db.prepare('SELECT locationId, COUNT(*) as count FROM inventory GROUP BY locationId').all()
   res.json(Object.fromEntries(rows.map(r => [r.locationId, r.count])))
@@ -276,38 +301,44 @@ app.get('/api/inventory/:locationId', (req, res) => {
 
 // Adds delta to the existing quantity, or creates a new entry.
 // Deletes the row when quantity reaches 0.
-app.post('/api/inventory/upsert', (req, res) => {
-  try {
-    const { locationId, productId, delta } = req.body
-    const now = new Date().toISOString()
+// Wrapped in a transaction to prevent a race between the SELECT and INSERT.
+const upsertInventory = db.transaction((locationId, productId, delta) => {
+  const now = new Date().toISOString()
 
-    const existing = db.prepare(
-      'SELECT * FROM inventory WHERE locationId = ? AND productId = ?'
-    ).get(locationId, productId)
+  const existing = db.prepare(
+    'SELECT * FROM inventory WHERE locationId = ? AND productId = ?'
+  ).get(locationId, productId)
 
-    if (existing) {
-      const newQty = Math.max(0, existing.quantity + delta)
-
-      if (newQty === 0) {
-        db.prepare('DELETE FROM inventory WHERE id = ?').run(existing.id)
-        return res.json({ ...existing, quantity: 0 })
-      }
-
-      db.prepare('UPDATE inventory SET quantity=?, updatedAt=? WHERE id=?').run(newQty, now, existing.id)
-      return res.json(db.prepare('SELECT * FROM inventory WHERE id = ?').get(existing.id))
+  if (existing) {
+    const newQty = Math.max(0, existing.quantity + delta)
+    if (newQty === 0) {
+      db.prepare('DELETE FROM inventory WHERE id = ?').run(existing.id)
+      return { ...existing, quantity: 0 }
     }
+    db.prepare('UPDATE inventory SET quantity=?, updatedAt=? WHERE id=?').run(newQty, now, existing.id)
+    return db.prepare('SELECT * FROM inventory WHERE id = ?').get(existing.id)
+  }
 
-    if (delta <= 0) return res.status(400).json({ error: 'Cannot remove an item not in inventory' })
+  if (delta <= 0) throw Object.assign(new Error('Cannot remove an item not in inventory'), { status: 400 })
 
-    const id = randomUUID()
-    db.prepare(`
-      INSERT INTO inventory (id, locationId, productId, quantity, addedAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(id, locationId, productId, delta, now, now)
+  const id = randomUUID()
+  db.prepare(`
+    INSERT INTO inventory (id, locationId, productId, quantity, addedAt, updatedAt)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(id, locationId, productId, delta, now, now)
 
-    res.json(db.prepare('SELECT * FROM inventory WHERE id = ?').get(id))
+  return db.prepare('SELECT * FROM inventory WHERE id = ?').get(id)
+})
+
+app.post('/api/inventory/upsert', (req, res) => {
+  const { locationId, productId, delta } = req.body
+  if (!locationId || !productId || typeof delta !== 'number') {
+    return res.status(400).json({ error: 'locationId, productId, and delta (number) are required' })
+  }
+  try {
+    res.json(upsertInventory(locationId, productId, delta))
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    res.status(e.status ?? 500).json({ error: e.message })
   }
 })
 
@@ -315,6 +346,7 @@ app.post('/api/inventory/upsert', (req, res) => {
 app.put('/api/inventory/:id/quantity', (req, res) => {
   try {
     const { quantity } = req.body
+    if (typeof quantity !== 'number') return res.status(400).json({ error: 'quantity (number) is required' })
     const now = new Date().toISOString()
 
     if (quantity <= 0) {

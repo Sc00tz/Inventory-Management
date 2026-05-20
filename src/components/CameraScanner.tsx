@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { BrowserMultiFormatReader, BrowserCodeReader } from '@zxing/browser'
-import { X, Camera } from 'lucide-react'
+import { X, Camera, Loader2 } from 'lucide-react'
 
 interface CameraScannerProps {
   onScan: (value: string) => void
@@ -11,6 +11,7 @@ export function CameraScanner({ onScan, onClose }: CameraScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const controlsRef = useRef<{ stop: () => void } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
 
   // Deduplicate rapid repeated scans of the same code with a 2-second cooldown
   const lastScanRef = useRef('')
@@ -50,10 +51,17 @@ export function CameraScanner({ onScan, onClose }: CameraScannerProps) {
           (result) => { if (result) handleScan(result.getText()) }
         )
 
-        if (stopped) controls.stop()
-        else controlsRef.current = controls
+        if (stopped) {
+          controls.stop()
+        } else {
+          controlsRef.current = controls
+          setLoading(false)
+        }
       } catch {
-        if (!stopped) setError('Camera access denied. Please allow camera access and try again.')
+        if (!stopped) {
+          setLoading(false)
+          setError('Camera access denied. Please allow camera access and try again.')
+        }
       }
     }
 
@@ -97,22 +105,32 @@ export function CameraScanner({ onScan, onClose }: CameraScannerProps) {
               muted
               playsInline
             />
-            {/* Targeting reticle */}
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="relative w-60 h-60">
-                <span className="absolute top-0 left-0 w-8 h-8 border-t-[3px] border-l-[3px] border-primary" />
-                <span className="absolute top-0 right-0 w-8 h-8 border-t-[3px] border-r-[3px] border-primary" />
-                <span className="absolute bottom-0 left-0 w-8 h-8 border-b-[3px] border-l-[3px] border-primary" />
-                <span className="absolute bottom-0 right-0 w-8 h-8 border-b-[3px] border-r-[3px] border-primary" />
+            {/* Spinner shown until the camera stream is live */}
+            {loading && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+                <Loader2 size={32} className="text-primary animate-spin" />
               </div>
-            </div>
+            )}
+            {/* Targeting reticle */}
+            {!loading && (
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="relative w-60 h-60">
+                  <span className="absolute top-0 left-0 w-8 h-8 border-t-[3px] border-l-[3px] border-primary" />
+                  <span className="absolute top-0 right-0 w-8 h-8 border-t-[3px] border-r-[3px] border-primary" />
+                  <span className="absolute bottom-0 left-0 w-8 h-8 border-b-[3px] border-l-[3px] border-primary" />
+                  <span className="absolute bottom-0 right-0 w-8 h-8 border-b-[3px] border-r-[3px] border-primary" />
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
 
       {/* Footer hint */}
       <div className="shrink-0 px-4 py-3 border-t border-border bg-background text-center">
-        <p className="text-xs text-muted-foreground">Point camera at a product barcode or location QR code</p>
+        <p className="text-xs text-muted-foreground">
+          {loading ? 'Starting camera…' : 'Point camera at a product barcode or location QR code'}
+        </p>
       </div>
     </div>
   )

@@ -14,21 +14,9 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "strict": false,
-    "noUnusedLocals": false,
-    "noUnusedParameters": false,
-    "noImplicitAny": false,
-    "strictNullChecks": false,
-    "noFallthroughCasesInSwitch": false,
+    "strict": true,
+    "noFallthroughCasesInSwitch": true,
     "skipDefaultLibCheck": true,
-    "noImplicitReturns": false,
-    "noPropertyAccessFromIndexSignature": false,
-    "exactOptionalPropertyTypes": false,
-    "noUncheckedIndexedAccess": false,
-    "noImplicitOverride": false,
-    "allowUnreachableCode": true,
-    "allowUnusedLabels": true,
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     }
