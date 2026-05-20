@@ -1,59 +1,252 @@
-# Enhanced Vite React TypeScript Template
+# ScanBin
 
-This template includes built-in detection for missing CSS variables between your Tailwind config and CSS files.
+A self-hosted home inventory system with barcode scanning. Create named storage locations (bins, shelves, fridges, pantries), scan product barcodes to track quantities, and print QR code labels so any location can be opened instantly from a phone or handheld scanner.
+
+---
 
 ## Features
 
-- **CSS Variable Detection**: Automatically detects if CSS variables referenced in `tailwind.config.cjs` are defined in `src/index.css`
-- **Enhanced Linting**: Includes ESLint, Stylelint, and custom CSS variable validation
-- **Shadcn/ui**: Pre-configured with all Shadcn components
-- **Modern Stack**: Vite + React + TypeScript + Tailwind CSS
+- **Hierarchical locations** — nest rooms → shelves → bins to any depth
+- **Barcode scanning** — hardware scanners (USB/Bluetooth HID) and camera-based scanning both supported
+- **Automatic product lookup** — scans checked against Open Food Facts, Open Beauty Facts, and UPC Item DB
+- **QR code labels** — each location gets a short URL you can print and stick on the box
+- **Inventory tracking** — quantities stored per product per location; tap +/− or type directly
+- **Product catalog** — searchable list of all known products across all locations
 
-## Available Scripts
+---
+
+## Requirements
+
+- **Docker + Docker Compose** (recommended) — no other dependencies needed
+- **Node.js 22+** for running locally without Docker
+
+---
+
+## Quick start (Docker)
 
 ```bash
-# Run all linting (includes CSS variable check)
-npm run lint
-
-# Check only CSS variables
-npm run check:css-vars
-
-# Individual linting
-npm run lint:js    # ESLint
-npm run lint:css   # Stylelint
+git clone https://github.com/Sc00tz/Inventory-Management.git
+cd Inventory-Management
+docker compose up -d
 ```
 
-## CSS Variable Detection
+Open **http://localhost:4000** in your browser.
 
-The template includes a custom script that:
+Data is stored in a named Docker volume (`inventory_data`) and persists across restarts and image updates.
 
-1. **Parses `tailwind.config.cjs`** to find all `var(--variable)` references
-2. **Parses `src/index.css`** to find all defined CSS variables (`--variable:`)
-3. **Cross-references** them to find missing definitions
-4. **Reports undefined variables** with clear error messages
+> **Tip:** To expose ScanBin on your local network so phones and tablets can reach it, map the port to `0.0.0.0`:
+> ```yaml
+> ports:
+>   - "0.0.0.0:4000:4000"
+> ```
 
-### Example Output
+---
 
-When CSS variables are missing:
-```
-❌ Undefined CSS variables found in tailwind.config.cjs:
-   --sidebar-background
-   --sidebar-foreground
-   --sidebar-primary
+## Local development
 
-Add these variables to src/index.css
-```
+Install dependencies, then start the client dev server and API server together:
 
-When all variables are defined:
-```
-✅ All CSS variables in tailwind.config.cjs are defined
+```bash
+npm install
+npm run dev
 ```
 
-## How It Works
+| Process | URL |
+|---------|-----|
+| Vite (React, HMR) | http://localhost:4000 |
+| Express API | http://localhost:3001 |
 
-The detection happens during the `npm run lint` command, which will:
-- Exit with error code 1 if undefined variables are found
-- Show exactly which variables need to be added to your CSS file
-- Integrate seamlessly with your development workflow
+The Vite dev server proxies all `/api/*` requests to the Express server at port 3001, so everything is reachable through port 4000.
 
-This prevents runtime CSS issues where Tailwind classes reference undefined CSS variables.
+You can also run them separately:
+
+```bash
+npm run dev:client   # Vite on :4000
+npm run dev:server   # Express on :3001
+```
+
+The database is created at `/data/inventory.db` by default. Override with the `DB_PATH` environment variable:
+
+```bash
+DB_PATH=./local.db npm run dev:server
+```
+
+### Building for production
+
+```bash
+npm run build        # compiles frontend into ./dist
+node server.js       # serves dist/ + API on PORT (default 4000)
+```
+
+---
+
+## Configuration
+
+All configuration is via environment variables.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `4000` | Port the server listens on |
+| `DB_PATH` | `/data/inventory.db` | Path to the SQLite database file |
+
+---
+
+## Docker reference
+
+### Production
+
+```bash
+# Start (detached)
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop
+docker compose down
+
+# Update to latest build
+docker compose down
+docker compose build --no-cache
+docker compose up -d
+```
+
+### Development (with live reload)
+
+```bash
+docker compose -f docker-compose.dev.yml up
+```
+
+The dev compose mounts the project directory into the container, so code changes are reflected without rebuilding.
+
+### Backup & restore
+
+The database lives in the `inventory_data` Docker volume. To back it up:
+
+```bash
+# Backup
+docker run --rm -v inventory_data:/data -v $(pwd):/backup alpine \
+  cp /data/inventory.db /backup/inventory-backup.db
+
+# Restore
+docker run --rm -v inventory_data:/data -v $(pwd):/backup alpine \
+  cp /backup/inventory-backup.db /data/inventory.db
+```
+
+---
+
+## Usage guide
+
+### 1. Create locations
+
+Click **New Location** on the home page. Give it a name, pick a type (room, shelf, bin, fridge, etc.), an optional parent location, and a colour. Locations can be nested to any depth — e.g. *Kitchen* → *Pantry* → *Top Shelf*.
+
+### 2. Print QR labels
+
+Open a location and click the **QR** icon in the top-right. You'll see a short URL (e.g. `http://192.168.1.x:4000/l/a1b2c3d4`) and a QR code. Print or screenshot it and stick it on the physical location.
+
+### 3. Scan a location
+
+On the home page, point a camera or hardware scanner at a location QR code. The app navigates straight to that location.
+
+### 4. Add products
+
+Inside a location, scan a product barcode. If the product is already known, quantity goes up by 1. If it's new, ScanBin looks it up across three databases and pre-fills the name and brand — just confirm or edit and save.
+
+You can also tap **Add manually** to pick from the existing product catalog without scanning.
+
+### 5. Adjust quantities
+
+Tap **−** or **+** on any inventory row to adjust by 1. Tap the quantity number itself to type an exact value. Setting a quantity to 0 removes the item from that location.
+
+### 6. Product catalog
+
+The **Products** page lists every product ScanBin has ever seen. You can search by name, brand, or barcode, edit details, or delete products you no longer need.
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+|-------|-----------|
+| Frontend | React 19, TypeScript, TanStack Router, TanStack Query |
+| Styling | Tailwind CSS, `@blinkdotnew/ui` component library |
+| Barcode scanning | ZXing (camera), native HID (hardware scanners) |
+| Backend | Express 4, Node.js 22+ |
+| Database | SQLite via `node:sqlite` (built-in Node module) |
+| Build | Vite 8 |
+| Container | Docker, Docker Compose |
+
+---
+
+## API reference
+
+All endpoints are prefixed with `/api`.
+
+### Locations
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/locations` | List all locations |
+| `GET` | `/locations/:id` | Get a location by ID |
+| `GET` | `/locations/short/:shortId` | Resolve a UUID prefix (QR short link) |
+| `GET` | `/locations/barcode/:barcode` | Find a location by its barcode |
+| `POST` | `/locations` | Create a location |
+| `PUT` | `/locations/:id` | Update a location |
+| `DELETE` | `/locations/:id` | Delete a location and all its children + inventory |
+
+### Products
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/products` | List all products |
+| `GET` | `/products/barcode/:barcode` | Find a product by barcode |
+| `POST` | `/products` | Create a product |
+| `PUT` | `/products/:id` | Update a product |
+| `DELETE` | `/products/:id` | Delete a product |
+
+### Inventory
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/inventory/:locationId` | Get inventory for a location (includes product data) |
+| `GET` | `/inventory-counts` | Get item counts for all locations (single query) |
+| `POST` | `/inventory/upsert` | Add/remove by delta — creates or deletes row automatically |
+| `PUT` | `/inventory/:id/quantity` | Set exact quantity — deletes row if ≤ 0 |
+| `DELETE` | `/inventory/:id` | Remove an inventory entry |
+
+### Utilities
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/qr?url=<url>` | Generate an SVG QR code for a given `http(s)` URL |
+| `GET` | `/l/:shortId` | Redirect short QR link to `/locations/:id` |
+
+---
+
+## Project structure
+
+```
+├── server.js              # Express API + static file serving
+├── src/
+│   ├── main.tsx           # React entry point
+│   ├── App.tsx            # Router and root layout
+│   ├── types.ts           # Shared TypeScript types
+│   ├── lib/
+│   │   ├── api.ts         # Fetch-based API client
+│   │   └── utils.ts       # Tailwind class helper (cn)
+│   ├── pages/
+│   │   ├── HomePage.tsx   # Location tree + scan-to-open
+│   │   ├── LocationPage.tsx  # Inventory management for one location
+│   │   └── ProductsPage.tsx  # Product catalog and search
+│   └── components/
+│       ├── ScanInput.tsx         # Text input with camera button
+│       ├── CameraScanner.tsx     # Full-screen camera barcode reader
+│       ├── AddProductModal.tsx   # New product form (with auto-lookup)
+│       ├── AddItemModal.tsx      # Manual inventory add from product list
+│       ├── LocationFormModal.tsx # Create/edit location form
+│       └── dialog.tsx            # Dialog wrapper
+├── Dockerfile
+├── docker-compose.yml         # Production
+└── docker-compose.dev.yml     # Development (live reload)
+```
