@@ -1,0 +1,187 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Lora:ital,wght@0,400..700;1,400..700&family=IBM+Plex+Mono:ital,wght@0,100..700;1,100..700&display=swap');
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Blink UI Theme CSS
+   REQUIRED for @blinkdotnew/ui components to render correctly.
+   BlinkUIProvider adds .theme-{name} + .dark/.light to <html>,
+   activating the matching CSS variable set below.
+   ───────────────────────────────────────────────────────────────────────────── */
+@import '@blinkdotnew/ui/styles';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  /* Full viewport chain so AppShell / Sidebar h-full + flex-1 SidebarContent work */
+  html {
+    height: 100%;
+  }
+
+  #root {
+    min-height: 100%;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  body {
+    min-height: 100%;
+    min-height: 100dvh;
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans), 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+    letter-spacing: var(--tracking-normal);
+  }
+}
+
+/* ── App palette (unlayered, after utilities) ─────────────────────────────────
+   Overrides @blinkdotnew/ui theme colors. @layer base loses specificity to UI themes.
+   Dark mode uses :root.dark + .theme-*.dark to match BlinkUIProvider.
+   ⚠️ AGENT MUST REPLACE placeholder values with a custom palette.
+   ──────────────────────────────────────────────────────────────────────────── */
+:root {
+  /* ⚠️ AGENT MUST REPLACE: These are placeholder colors. You MUST define a custom palette before writing components. */
+  /* The template uses distinctive placeholder colors to force customization - do NOT use these in production! */
+
+  /*
+   * EXAMPLE PALETTES (use as inspiration, replace with your own):
+   *
+   * Modern SaaS (Business/Enterprise):
+   * --primary: 220 10% 20%;        (Charcoal #2D3748)
+   * --accent: 220 10% 30%;         (Lighter charcoal #4A5568)
+   *
+   * Bold Tech (Startups/Developer Tools):
+   * --primary: 348 83% 47%;        (Crimson #DA1E37)
+   * --accent: 348 83% 57%;         (Lighter crimson #F0213E)
+   *
+   * Quantum Rose (Creative/Design):
+   * --primary: 330 81% 50%;        (Pink #E6067A)
+   * --accent: 330 81% 70%;         (Lighter pink #F472B6)
+   *
+   * Rich Forest (Calm/Professional):
+   * --primary: 151 55% 25%;        (Pine #1C6340)
+   * --accent: 151 55% 35%;         (Lighter pine #288C5A)
+   *
+   * Sunset Warmth (Friendly/Welcoming):
+   * --primary: 24 95% 53%;         (Orange #F97316)
+   * --accent: 24 95% 63%;          (Lighter orange #FB923C)
+   */
+
+  /* ScanBin — dark warehouse palette */
+  --background: 222 20% 9%;
+  --foreground: 215 15% 85%;
+  --card: 220 18% 13%;
+  --card-foreground: 215 15% 85%;
+  --popover: 220 18% 13%;
+  --popover-foreground: 215 15% 85%;
+  --primary: 38 92% 50%;
+  --primary-foreground: 30 10% 10%;
+  --secondary: 215 20% 18%;
+  --secondary-foreground: 215 15% 70%;
+  --muted: 220 15% 16%;
+  --muted-foreground: 215 10% 50%;
+  --accent: 38 92% 60%;
+  --accent-foreground: 30 10% 10%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 220 14% 20%;
+  --input: 220 14% 20%;
+  --ring: 38 92% 50%;
+
+  --chart-1: 38 92% 50%;
+  --chart-2: 151 55% 40%;
+  --chart-3: 200 80% 50%;
+  --chart-4: 262 52% 55%;
+  --chart-5: 0 72% 51%;
+
+  --sidebar: 222 22% 11%;
+  --sidebar-foreground: 215 15% 80%;
+  --sidebar-primary: 38 92% 50%;
+  --sidebar-primary-foreground: 30 10% 10%;
+  --sidebar-accent: 220 18% 16%;
+  --sidebar-accent-foreground: 215 15% 80%;
+  --sidebar-border: 220 14% 18%;
+  --sidebar-ring: 38 92% 50%;
+
+  /* Fonts */
+  --font-sans: DM Sans, sans-serif;
+  --font-serif: Lora, serif;
+  --font-mono: IBM Plex Mono, monospace;
+
+  /* Shadows */
+  --shadow-2xs: 0px 4px 8px -1px hsl(0 0% 0% / 0.05);
+  --shadow-xs: 0px 4px 8px -1px hsl(0 0% 0% / 0.05);
+  --shadow-sm: 0px 4px 8px -1px hsl(0 0% 0% / 0.10), 0px 1px 2px -2px hsl(0 0% 0% / 0.10);
+  --shadow: 0px 4px 8px -1px hsl(0 0% 0% / 0.10), 0px 1px 2px -2px hsl(0 0% 0% / 0.10);
+  --shadow-md: 0px 4px 8px -1px hsl(0 0% 0% / 0.10), 0px 2px 4px -2px hsl(0 0% 0% / 0.10);
+  --shadow-lg: 0px 4px 8px -1px hsl(0 0% 0% / 0.10), 0px 4px 6px -2px hsl(0 0% 0% / 0.10);
+  --shadow-xl: 0px 4px 8px -1px hsl(0 0% 0% / 0.10), 0px 8px 10px -2px hsl(0 0% 0% / 0.10);
+  --shadow-2xl: 0px 4px 8px -1px hsl(0 0% 0% / 0.25);
+
+  /* Misc */
+  --tracking-normal: 0em;
+  --spacing: 0.25rem;
+  --radius: 0.5rem;
+}
+
+:root.dark,
+.theme-linear.dark,
+.theme-glass.dark,
+.theme-midnight.dark,
+.theme-minimal.dark {
+  /* ScanBin dark mode — same palette (app is dark-first) */
+  --background: 222 20% 9%;
+  --foreground: 215 15% 85%;
+  --card: 220 18% 13%;
+  --card-foreground: 215 15% 85%;
+  --popover: 220 18% 13%;
+  --popover-foreground: 215 15% 85%;
+  --primary: 38 92% 50%;
+  --primary-foreground: 30 10% 10%;
+  --secondary: 215 20% 18%;
+  --secondary-foreground: 215 15% 70%;
+  --muted: 220 15% 16%;
+  --muted-foreground: 215 10% 50%;
+  --accent: 38 92% 60%;
+  --accent-foreground: 30 10% 10%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 220 14% 20%;
+  --input: 220 14% 20%;
+  --ring: 38 92% 50%;
+
+  --chart-1: 38 92% 50%;
+  --chart-2: 151 55% 40%;
+  --chart-3: 200 80% 50%;
+  --chart-4: 262 52% 55%;
+  --chart-5: 0 72% 51%;
+
+  --sidebar: 222 22% 11%;
+  --sidebar-foreground: 215 15% 80%;
+  --sidebar-primary: 38 92% 50%;
+  --sidebar-primary-foreground: 30 10% 10%;
+  --sidebar-accent: 220 18% 16%;
+  --sidebar-accent-foreground: 215 15% 80%;
+  --sidebar-border: 220 14% 18%;
+  --sidebar-ring: 38 92% 50%;
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
