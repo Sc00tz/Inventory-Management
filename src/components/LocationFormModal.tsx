@@ -13,15 +13,14 @@ function capitalize(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1)
 }
 
-interface LocationFormModalProps {
-  open: boolean
-  location?: Location | null
-  locations?: Location[]
-  onSave: (data: { name: string; type: string; barcode: string; description: string; color: string; parentId: string | null }) => void
-  onClose: () => void
-}
-
-function flattenTree(locations: Location[], excludeId?: string | null, parentId: string | null = null, depth = 0): { location: Location; depth: number }[] {
+// Flattens the location tree into a depth-annotated list for the parent selector.
+// Excludes the current location (and its subtree) to prevent circular parentage.
+function flattenTree(
+  locations: Location[],
+  excludeId?: string | null,
+  parentId: string | null = null,
+  depth = 0,
+): { location: Location; depth: number }[] {
   const children = locations.filter(l => (l.parentId ?? null) === parentId)
   const result: { location: Location; depth: number }[] = []
   for (const loc of children) {
@@ -30,6 +29,21 @@ function flattenTree(locations: Location[], excludeId?: string | null, parentId:
     result.push(...flattenTree(locations, excludeId, loc.id, depth + 1))
   }
   return result
+}
+
+interface LocationFormModalProps {
+  open: boolean
+  location?: Location | null
+  locations?: Location[]
+  onSave: (data: {
+    name: string
+    type: string
+    barcode: string
+    description: string
+    color: string
+    parentId: string | null
+  }) => void
+  onClose: () => void
 }
 
 export function LocationFormModal({ open, location, locations = [], onSave, onClose }: LocationFormModalProps) {
@@ -41,6 +55,7 @@ export function LocationFormModal({ open, location, locations = [], onSave, onCl
   const [addingType, setAddingType] = useState(false)
   const [newTypeName, setNewTypeName] = useState('')
 
+  // Populate form when editing an existing location
   useEffect(() => {
     if (location) {
       setName(location.name)
@@ -59,6 +74,7 @@ export function LocationFormModal({ open, location, locations = [], onSave, onCl
     setNewTypeName('')
   }, [location, open])
 
+  // Merge built-in types with any custom types already in use
   const existingCustomTypes = [...new Set(locations.map(l => l.type))].filter(
     t => !BUILT_IN_TYPES.includes(t)
   )
@@ -66,9 +82,7 @@ export function LocationFormModal({ open, location, locations = [], onSave, onCl
 
   const commitNewType = () => {
     const trimmed = newTypeName.trim().toLowerCase()
-    if (trimmed) {
-      setType(trimmed)
-    }
+    if (trimmed) setType(trimmed)
     setAddingType(false)
     setNewTypeName('')
   }
@@ -87,7 +101,9 @@ export function LocationFormModal({ open, location, locations = [], onSave, onCl
         <DialogHeader>
           <DialogTitle>{location ? 'Edit Location' : 'New Location'}</DialogTitle>
         </DialogHeader>
+
         <form onSubmit={handleSubmit} className="flex flex-col gap-3 mt-1">
+          {/* Name */}
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Name *</label>
             <input
@@ -100,6 +116,7 @@ export function LocationFormModal({ open, location, locations = [], onSave, onCl
             />
           </div>
 
+          {/* Type — pill buttons + custom type entry */}
           <div>
             <label className="text-xs text-muted-foreground mb-2 block">Type</label>
             <div className="flex flex-wrap gap-1.5">
@@ -153,6 +170,7 @@ export function LocationFormModal({ open, location, locations = [], onSave, onCl
             </div>
           </div>
 
+          {/* Parent location */}
           {locations.length > 0 && (
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Parent Location (optional)</label>
@@ -171,6 +189,7 @@ export function LocationFormModal({ open, location, locations = [], onSave, onCl
             </div>
           )}
 
+          {/* Description */}
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Description (optional)</label>
             <input
@@ -181,6 +200,7 @@ export function LocationFormModal({ open, location, locations = [], onSave, onCl
             />
           </div>
 
+          {/* Color picker */}
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Color</label>
             <div className="flex gap-2 flex-wrap">

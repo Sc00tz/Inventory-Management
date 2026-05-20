@@ -49,6 +49,7 @@ export function AddItemModal({ open, products, onAdd, onClose }: AddItemModalPro
           <DialogTitle>Add Item</DialogTitle>
         </DialogHeader>
 
+        {/* Step 1: pick a product */}
         {!selected ? (
           <div className="flex flex-col gap-3">
             <div className="relative">
@@ -97,6 +98,7 @@ export function AddItemModal({ open, products, onAdd, onClose }: AddItemModalPro
             <Button variant="outline" className="w-full" onClick={handleClose}>Cancel</Button>
           </div>
         ) : (
+          /* Step 2: set quantity */
           <div className="flex flex-col gap-4">
             <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 px-3 py-2.5">
               {selected.imageUrl ? (
@@ -134,7 +136,11 @@ export function AddItemModal({ open, products, onAdd, onClose }: AddItemModalPro
 
             <div className="flex gap-2">
               <Button variant="outline" className="flex-1" onClick={() => setSelected(null)}>Back</Button>
-              <Button className="flex-1" onClick={handleConfirm} disabled={!quantity || parseFloat(quantity) <= 0}>
+              <Button
+                className="flex-1"
+                onClick={handleConfirm}
+                disabled={!quantity || parseFloat(quantity) <= 0}
+              >
                 Add to Location
               </Button>
             </div>

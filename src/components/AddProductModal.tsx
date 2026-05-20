@@ -16,15 +16,19 @@ export function AddProductModal({ open, barcode, onConfirm, onCancel }: AddProdu
   const [brand, setBrand] = useState('')
   const [looking, setLooking] = useState(false)
   const [looked, setLooked] = useState(false)
+
+  // Prevents setState calls if the modal closes before the async lookup resolves
   const abortedRef = useRef(false)
 
   useEffect(() => {
     if (!open || !barcode) return
+
     abortedRef.current = false
     setName('')
     setBrand('')
     setLooked(false)
     setLooking(true)
+
     lookupBarcode(barcode).then((result) => {
       if (abortedRef.current) return
       setLooking(false)
@@ -34,6 +38,7 @@ export function AddProductModal({ open, barcode, onConfirm, onCancel }: AddProdu
         setBrand(result.brand || '')
       }
     })
+
     return () => { abortedRef.current = true }
   }, [open, barcode])
 
@@ -49,8 +54,13 @@ export function AddProductModal({ open, barcode, onConfirm, onCancel }: AddProdu
         <DialogHeader>
           <DialogTitle>New Product</DialogTitle>
         </DialogHeader>
-        <div className="text-xs font-mono text-muted-foreground mb-3 bg-muted px-3 py-1.5 rounded">{barcode}</div>
 
+        {/* Barcode badge */}
+        <div className="text-xs font-mono text-muted-foreground mb-3 bg-muted px-3 py-1.5 rounded">
+          {barcode}
+        </div>
+
+        {/* Lookup status */}
         {looking && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 size={14} className="animate-spin" />
@@ -60,7 +70,7 @@ export function AddProductModal({ open, barcode, onConfirm, onCancel }: AddProdu
         {looked && !name && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Search size={14} />
-            Not found in OpenFoodFacts — enter details manually
+            Not found — enter details manually
           </div>
         )}
 
@@ -98,4 +108,3 @@ export function AddProductModal({ open, barcode, onConfirm, onCancel }: AddProdu
     </Dialog>
   )
 }
-

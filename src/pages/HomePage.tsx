@@ -9,15 +9,16 @@ import { LocationFormModal } from '../components/LocationFormModal'
 import { getLocations, getLocationByBarcode, getLocationByShortId, createLocation, getInventoryCounts } from '../lib/api'
 import type { Location, LocationType } from '../types'
 
+// Map of location type → icon component
 const TYPE_ICONS: Record<string, React.FC<{ size?: number; className?: string }>> = {
-  room: Home,
-  shelf: Layers,
-  bin: Archive,
-  fridge: Refrigerator,
-  freezer: Snowflake,
+  room:     Home,
+  shelf:    Layers,
+  bin:      Archive,
+  fridge:   Refrigerator,
+  freezer:  Snowflake,
   cupboard: BookOpen,
-  pantry: Package2,
-  other: Box,
+  pantry:   Package2,
+  other:    Box,
 }
 
 function getIcon(type: string) {
@@ -45,11 +46,9 @@ function LocationTreeNode({ location, allLocations, counts, depth, expanded, onT
 
   return (
     <div>
-      <div
-        className="flex items-center gap-1"
-        style={{ paddingLeft: `${depth * 1.25}rem` }}
-      >
-        {/* Expand toggle — only shown when there are children */}
+      <div className="flex items-center gap-1" style={{ paddingLeft: `${depth * 1.25}rem` }}>
+
+        {/* Expand/collapse toggle — only rendered when children exist */}
         {hasChildren ? (
           <button
             onClick={() => onToggle(location.id)}
@@ -61,7 +60,7 @@ function LocationTreeNode({ location, allLocations, counts, depth, expanded, onT
           <span className="w-6 shrink-0" />
         )}
 
-        {/* Navigation row */}
+        {/* Row — navigates to the location page on click */}
         <button
           onClick={() => onNavigate(location.id)}
           className="flex items-center gap-2.5 flex-1 min-w-0 py-2 px-2 rounded-lg text-left hover:bg-muted/50 active:bg-muted transition-colors"
@@ -80,6 +79,7 @@ function LocationTreeNode({ location, allLocations, counts, depth, expanded, onT
         </button>
       </div>
 
+      {/* Recursively render children when expanded */}
       {isExpanded && hasChildren && (
         <div>
           {children.map(child => (
@@ -107,26 +107,34 @@ export function HomePage() {
   const queryClient = useQueryClient()
   const [showNewModal, setShowNewModal] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const didAutoExpand = useRef(false)
 
   const { data: locations = [], isLoading } = useQuery({
     queryKey: ['locations'],
     queryFn: getLocations,
   })
 
-  // Auto-expand top-level locations on first load
-  const topLevel = locations.filter(l => !l.parentId)
-
   const { data: counts = {} } = useQuery({
     queryKey: ['inventory-counts'],
     queryFn: getInventoryCounts,
   })
+
+  const topLevel = locations.filter(l => !l.parentId)
+
+  // Expand all top-level locations on first data load so the tree is useful immediately
+  useEffect(() => {
+    if (!didAutoExpand.current && topLevel.length > 0) {
+      didAutoExpand.current = true
+      setExpanded(new Set(topLevel.map(l => l.id)))
+    }
+  }, [topLevel])
 
   const createMutation = useMutation({
     mutationFn: (data: Parameters<typeof createLocation>[0]) => createLocation(data),
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ['locations'] })
       setShowNewModal(false)
-      // Expand parent if one was set
+      // If the new location has a parent, expand the parent so it's immediately visible
       if (created.parentId) {
         setExpanded(prev => new Set([...prev, created.parentId!]))
       }
@@ -136,7 +144,7 @@ export function HomePage() {
   })
 
   const handleScan = async (value: string) => {
-    // Short URL format: /l/:shortId
+    // QR short link: /l/:shortId
     const shortMatch = value.match(/\/l\/([^/?#]+)/)
     if (shortMatch) {
       const loc = await getLocationByShortId(shortMatch[1])
@@ -144,14 +152,14 @@ export function HomePage() {
       return
     }
 
-    // Full URL format: /locations/:id
+    // Full URL: /locations/:id
     const fullMatch = value.match(/\/locations\/([^/?#]+)/)
     if (fullMatch) {
       navigate({ to: '/locations/$id', params: { id: fullMatch[1] } as never })
       return
     }
 
-    // Plain barcode lookup
+    // Plain barcode assigned to a location
     const loc = await getLocationByBarcode(value)
     if (loc) {
       navigate({ to: '/locations/$id', params: { id: loc.id } as never })
@@ -168,15 +176,6 @@ export function HomePage() {
     })
   }
 
-  // Expand all top-level on first data load
-  const didAutoExpand = useRef(false)
-  useEffect(() => {
-    if (!didAutoExpand.current && topLevel.length > 0) {
-      didAutoExpand.current = true
-      setExpanded(new Set(topLevel.map(l => l.id)))
-    }
-  }, [topLevel])
-
   return (
     <div className="flex flex-col gap-6 p-6 max-w-3xl mx-auto">
       {/* Header */}
@@ -190,7 +189,7 @@ export function HomePage() {
         </Button>
       </div>
 
-      {/* Scan input */}
+      {/* Scan box — opens the matching location from a QR code or barcode */}
       <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
         <div className="flex items-center gap-2 mb-3">
           <ScanBarcode size={16} className="text-primary" />
@@ -242,12 +241,12 @@ export function HomePage() {
         locations={locations}
         onSave={(data) =>
           createMutation.mutate({
-            name: data.name,
-            type: data.type as LocationType,
-            barcode: data.barcode || null,
+            name:        data.name,
+            type:        data.type as LocationType,
+            barcode:     data.barcode || null,
             description: data.description || null,
-            color: data.color,
-            parentId: data.parentId,
+            color:       data.color,
+            parentId:    data.parentId,
           })
         }
         onClose={() => setShowNewModal(false)}

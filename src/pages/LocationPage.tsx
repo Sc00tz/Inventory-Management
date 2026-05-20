@@ -23,21 +23,23 @@ import {
 } from '../lib/api'
 import type { Location, LocationType, InventoryWithProduct } from '../types'
 
+// Map of location type → icon component
 const TYPE_ICONS: Record<string, React.FC<{ size?: number; className?: string }>> = {
-  room: Home,
-  shelf: Layers,
-  bin: Archive,
-  fridge: Refrigerator,
-  freezer: Snowflake,
+  room:     Home,
+  shelf:    Layers,
+  bin:      Archive,
+  fridge:   Refrigerator,
+  freezer:  Snowflake,
   cupboard: BookOpen,
-  pantry: Package2,
-  other: Box,
+  pantry:   Package2,
+  other:    Box,
 }
 
 function getIcon(type: string) {
   return TYPE_ICONS[type] ?? Box
 }
 
+// Walks up the location tree to build the breadcrumb chain for a given id
 function buildAncestors(id: string, all: Location[]): Location[] {
   const map = new Map(all.map(l => [l.id, l]))
   const chain: Location[] = []
@@ -53,10 +55,13 @@ function buildAncestors(id: string, all: Location[]): Location[] {
 
 interface PendingScan { barcode: string }
 
+// ── Page ──────────────────────────────────────────────────────────────────────
+
 export function LocationPage() {
   const { id } = useParams({ from: '/locations/$id' })
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+
   const [pendingScan, setPendingScan] = useState<PendingScan | null>(null)
   const [showAddItem, setShowAddItem] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
@@ -65,8 +70,10 @@ export function LocationPage() {
   const [copied, setCopied] = useState(false)
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Short URL for this location — used in the QR code and copy button
   const locationUrl = typeof window !== 'undefined' ? `${window.location.origin}/l/${id.slice(0, 8)}` : ''
 
+  // Clear the copy-feedback timer on unmount to avoid a setState on an unmounted component
   useEffect(() => () => { if (copyTimerRef.current) clearTimeout(copyTimerRef.current) }, [])
 
   const handleCopy = async () => {
@@ -79,6 +86,8 @@ export function LocationPage() {
       toast.error('Failed to copy URL')
     }
   }
+
+  // ── Queries ──────────────────────────────────────────────────────────────────
 
   const { data: location, isLoading: locLoading } = useQuery({
     queryKey: ['location', id],
@@ -103,28 +112,31 @@ export function LocationPage() {
   const ancestors = buildAncestors(id, allLocations)
   const children = allLocations.filter(l => (l.parentId ?? null) === id)
 
-  const invalidate = () => {
+  // Invalidates both the per-location inventory and the home-page counts badge
+  const invalidateInventory = () => {
     queryClient.invalidateQueries({ queryKey: ['inventory', id] })
     queryClient.invalidateQueries({ queryKey: ['inventory-counts'] })
   }
 
+  // ── Mutations ────────────────────────────────────────────────────────────────
+
   const adjustMutation = useMutation({
     mutationFn: ({ productId, delta }: { productId: string; delta: number }) =>
       upsertInventoryItem(id, productId, delta),
-    onSuccess: invalidate,
+    onSuccess: invalidateInventory,
     onError: () => toast.error('Failed to update quantity'),
   })
 
   const setQtyMutation = useMutation({
     mutationFn: ({ entryId, qty }: { entryId: string; qty: number }) =>
       setInventoryQuantity(entryId, qty),
-    onSuccess: invalidate,
+    onSuccess: invalidateInventory,
     onError: () => toast.error('Failed to update quantity'),
   })
 
   const removeMutation = useMutation({
     mutationFn: (entryId: string) => removeInventoryItem(entryId),
-    onSuccess: () => { invalidate(); toast.success('Item removed') },
+    onSuccess: () => { invalidateInventory(); toast.success('Item removed') },
     onError: () => toast.error('Failed to remove item'),
   })
 
@@ -142,6 +154,7 @@ export function LocationPage() {
     mutationFn: () => deleteLocation(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['locations'] })
+      // Navigate to parent if one exists, otherwise go home
       const parentId = location?.parentId
       if (parentId) navigate({ to: '/locations/$id', params: { id: parentId } as never })
       else navigate({ to: '/' })
@@ -149,6 +162,10 @@ export function LocationPage() {
     },
   })
 
+  // ── Scan handler ─────────────────────────────────────────────────────────────
+
+  // Keyed on location.id so the function identity is stable while viewing
+  // the same location, but refreshes when navigating to a different one.
   const handleScan = useCallback(async (barcode: string) => {
     if (!location) return
     try {
@@ -157,11 +174,13 @@ export function LocationPage() {
         await adjustMutation.mutateAsync({ productId: existing.id, delta: 1 })
         toast.success(`+1 ${existing.name}`)
       } else {
+        // Unknown barcode — prompt the user to name the new product
         setPendingScan({ barcode })
       }
     } catch {
       toast.error('Failed to process scan')
     }
+  // adjustMutation.mutateAsync is stable for the lifetime of the mutation instance
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location?.id])
 
@@ -176,6 +195,8 @@ export function LocationPage() {
       toast.error('Failed to add product')
     }
   }
+
+  // ── Render ───────────────────────────────────────────────────────────────────
 
   if (locLoading) {
     return (
@@ -202,6 +223,7 @@ export function LocationPage() {
 
   return (
     <div className="flex flex-col gap-5 p-6 max-w-3xl mx-auto">
+
       {/* Breadcrumb */}
       <nav className="flex items-center gap-1 text-xs text-muted-foreground flex-wrap">
         <button onClick={() => navigate({ to: '/' })} className="hover:text-foreground transition-colors">
@@ -259,7 +281,7 @@ export function LocationPage() {
         </div>
       </div>
 
-      {/* QR / URL panel */}
+      {/* QR code / URL panel */}
       {showQr && (
         <div className="rounded-xl border border-border bg-card p-4 flex flex-col gap-3">
           <div className="flex items-center gap-2">
@@ -279,7 +301,7 @@ export function LocationPage() {
         </div>
       )}
 
-      {/* Child locations */}
+      {/* Child locations grid */}
       {children.length > 0 && (
         <div>
           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Inside</p>
@@ -307,7 +329,7 @@ export function LocationPage() {
         </div>
       )}
 
-      {/* Scan input */}
+      {/* Scan box — adds +1 of a known product, or prompts to create a new one */}
       <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
         <div className="flex items-center gap-2 mb-3">
           <ScanBarcode size={15} className="text-primary" />
@@ -326,7 +348,7 @@ export function LocationPage() {
         </p>
       </div>
 
-      {/* Inventory */}
+      {/* Inventory list */}
       {invLoading ? (
         <div className="space-y-2">
           {[...Array(3)].map((_, i) => (
@@ -337,7 +359,9 @@ export function LocationPage() {
         <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-12 text-center">
           <Package size={28} className="text-muted-foreground/40 mb-2" />
           <p className="text-sm text-muted-foreground">This location is empty</p>
-          <p className="text-xs text-muted-foreground/60 mt-1">Scan a barcode above, or use <strong className="text-muted-foreground">Add manually</strong> to pick from your product list</p>
+          <p className="text-xs text-muted-foreground/60 mt-1">
+            Scan a barcode above, or use <strong className="text-muted-foreground">Add manually</strong> to pick from your product list
+          </p>
         </div>
       ) : (
         <div className="rounded-xl border border-border overflow-hidden">
@@ -379,6 +403,7 @@ export function LocationPage() {
         )}
       </div>
 
+      {/* Modals */}
       <AddItemModal
         open={showAddItem}
         products={allProducts}
@@ -402,12 +427,12 @@ export function LocationPage() {
         locations={allLocations}
         onSave={(data) =>
           updateLocMutation.mutate({
-            name: data.name,
-            type: data.type as LocationType,
-            barcode: data.barcode || null,
+            name:        data.name,
+            type:        data.type as LocationType,
+            barcode:     data.barcode || null,
             description: data.description || null,
-            color: data.color,
-            parentId: data.parentId,
+            color:       data.color,
+            parentId:    data.parentId,
           })
         }
         onClose={() => setShowEditModal(false)}
@@ -416,7 +441,7 @@ export function LocationPage() {
   )
 }
 
-// ── Inventory Row ─────────────────────────────────────────────────────────────
+// ── Inventory row ─────────────────────────────────────────────────────────────
 
 interface InventoryRowProps {
   item: InventoryWithProduct
@@ -434,6 +459,11 @@ function InventoryRow({ item, onAdjust, onSetQty, onRemove }: InventoryRowProps)
     if (!isNaN(n) && n >= 0) onSetQty(n)
     setEditing(false)
   }
+
+  // Display whole numbers without a decimal point, keep decimals for fractional quantities
+  const displayQty = Number(item.quantity) % 1 === 0
+    ? Math.floor(Number(item.quantity))
+    : item.quantity
 
   return (
     <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors group">
@@ -453,6 +483,8 @@ function InventoryRow({ item, onAdjust, onSetQty, onRemove }: InventoryRowProps)
           <span className="text-xs font-mono text-muted-foreground/50">{item.product.barcode}</span>
         </div>
       </div>
+
+      {/* Quantity controls */}
       <div className="flex items-center gap-1.5 shrink-0">
         <button
           onClick={() => onAdjust(-1)}
@@ -460,6 +492,7 @@ function InventoryRow({ item, onAdjust, onSetQty, onRemove }: InventoryRowProps)
         >
           <Minus size={13} />
         </button>
+
         {editing ? (
           <input
             autoFocus
@@ -474,15 +507,17 @@ function InventoryRow({ item, onAdjust, onSetQty, onRemove }: InventoryRowProps)
             onClick={() => { setEditVal(String(item.quantity)); setEditing(true) }}
             className="w-10 text-center text-sm font-mono text-foreground hover:text-primary transition-colors"
           >
-            {Number(item.quantity) % 1 === 0 ? Math.floor(Number(item.quantity)) : item.quantity}
+            {displayQty}
           </button>
         )}
+
         <button
           onClick={() => onAdjust(1)}
           className="w-7 h-7 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-primary/60 transition-colors"
         >
           <Plus size={13} />
         </button>
+
         <button
           onClick={onRemove}
           className="w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground/30 hover:text-destructive transition-colors ml-1 opacity-0 group-hover:opacity-100"

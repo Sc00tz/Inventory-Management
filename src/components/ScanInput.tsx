@@ -9,10 +9,18 @@ interface ScanInputProps {
   autoFocus?: boolean
   className?: string
   disabled?: boolean
+  /** Close the camera overlay automatically after a successful scan */
   closeOnScan?: boolean
 }
 
-export function ScanInput({ onScan, placeholder = 'Scan or type barcode…', autoFocus = false, className, disabled, closeOnScan = false }: ScanInputProps) {
+export function ScanInput({
+  onScan,
+  placeholder = 'Scan or type barcode…',
+  autoFocus = false,
+  className,
+  disabled,
+  closeOnScan = false,
+}: ScanInputProps) {
   const [value, setValue] = useState('')
   const [cameraOpen, setCameraOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -22,6 +30,7 @@ export function ScanInput({ onScan, placeholder = 'Scan or type barcode…', aut
   }, [autoFocus])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Hardware scanners typically terminate with Enter
     if (e.key === 'Enter' && value.trim()) {
       onScan(value.trim())
       setValue('')
@@ -52,6 +61,7 @@ export function ScanInput({ onScan, placeholder = 'Scan or type barcode…', aut
             disabled && 'opacity-50 cursor-not-allowed'
           )}
         />
+        {/* Show clear button when there's input, camera button otherwise */}
         {value ? (
           <button
             onClick={handleClear}

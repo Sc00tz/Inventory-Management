@@ -11,6 +11,8 @@ export function CameraScanner({ onScan, onClose }: CameraScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const controlsRef = useRef<{ stop: () => void } | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  // Deduplicate rapid repeated scans of the same code with a 2-second cooldown
   const lastScanRef = useRef('')
   const cooldownRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -30,13 +32,14 @@ export function CameraScanner({ onScan, onClose }: CameraScannerProps) {
       try {
         const reader = new BrowserMultiFormatReader()
 
+        // Prefer a rear/environment-facing camera when available
         let deviceId: string | undefined
         try {
           const devices = await BrowserCodeReader.listVideoInputDevices()
           const back = devices.find(d => /back|rear|environment/i.test(d.label))
           deviceId = back?.deviceId
         } catch {
-          // use default camera
+          // Fall back to the default camera if enumeration fails
         }
 
         if (stopped) return
@@ -65,6 +68,7 @@ export function CameraScanner({ onScan, onClose }: CameraScannerProps) {
 
   return (
     <div className="fixed inset-0 z-50 bg-background flex flex-col">
+      {/* Toolbar */}
       <div className="flex items-center justify-between px-4 h-14 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
           <Camera size={16} className="text-primary" />
@@ -78,6 +82,7 @@ export function CameraScanner({ onScan, onClose }: CameraScannerProps) {
         </button>
       </div>
 
+      {/* Camera viewport */}
       <div className="flex-1 relative bg-black overflow-hidden">
         {error ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-8 text-center">
@@ -92,6 +97,7 @@ export function CameraScanner({ onScan, onClose }: CameraScannerProps) {
               muted
               playsInline
             />
+            {/* Targeting reticle */}
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               <div className="relative w-60 h-60">
                 <span className="absolute top-0 left-0 w-8 h-8 border-t-[3px] border-l-[3px] border-primary" />
@@ -104,6 +110,7 @@ export function CameraScanner({ onScan, onClose }: CameraScannerProps) {
         )}
       </div>
 
+      {/* Footer hint */}
       <div className="shrink-0 px-4 py-3 border-t border-border bg-background text-center">
         <p className="text-xs text-muted-foreground">Point camera at a product barcode or location QR code</p>
       </div>

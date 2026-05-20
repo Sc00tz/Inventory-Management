@@ -8,6 +8,8 @@ import { CameraScanner } from '../components/CameraScanner'
 import { getProducts, updateProduct, deleteProduct, createProduct, lookupBarcode } from '../lib/api'
 import type { Product } from '../types'
 
+// ── Page ──────────────────────────────────────────────────────────────────────
+
 export function ProductsPage() {
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
@@ -57,6 +59,7 @@ export function ProductsPage() {
 
   return (
     <div className="flex flex-col gap-5 p-6 max-w-3xl mx-auto">
+      {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-foreground tracking-tight">Products</h1>
@@ -67,6 +70,7 @@ export function ProductsPage() {
         </Button>
       </div>
 
+      {/* Search — supports name, brand, and barcode */}
       <div className="relative">
         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
         <input
@@ -84,6 +88,7 @@ export function ProductsPage() {
           <Camera size={16} />
         </button>
       </div>
+
       {searchCamera && (
         <CameraScanner
           onScan={(val) => { setSearch(val); setSearchCamera(false) }}
@@ -91,6 +96,7 @@ export function ProductsPage() {
         />
       )}
 
+      {/* Product list */}
       {isLoading ? (
         <div className="space-y-2">
           {[...Array(4)].map((_, i) => (
@@ -109,14 +115,22 @@ export function ProductsPage() {
         <div className="rounded-xl border border-border overflow-hidden">
           <div className="divide-y divide-border">
             {filtered.map((product) => (
-              <div key={product.id} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 group transition-colors">
+              <div
+                key={product.id}
+                className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 group transition-colors"
+              >
                 {product.imageUrl ? (
-                  <img src={product.imageUrl} alt={product.name} className="w-10 h-10 rounded-md object-cover shrink-0 bg-muted" />
+                  <img
+                    src={product.imageUrl}
+                    alt={product.name}
+                    className="w-10 h-10 rounded-md object-cover shrink-0 bg-muted"
+                  />
                 ) : (
                   <div className="w-10 h-10 rounded-md bg-muted shrink-0 flex items-center justify-center">
                     <Package size={16} className="text-muted-foreground/40" />
                   </div>
                 )}
+
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-foreground">{product.name}</p>
                   <div className="flex items-center gap-2 mt-0.5">
@@ -124,6 +138,8 @@ export function ProductsPage() {
                     <span className="text-xs font-mono text-muted-foreground/50">{product.barcode}</span>
                   </div>
                 </div>
+
+                {/* Action buttons — visible on row hover */}
                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                   <button
                     onClick={() => setEditProduct(product)}
@@ -131,6 +147,7 @@ export function ProductsPage() {
                   >
                     <Edit2 size={13} />
                   </button>
+
                   {confirmDeleteId === product.id ? (
                     <div className="flex items-center gap-1">
                       <button
@@ -179,7 +196,7 @@ export function ProductsPage() {
   )
 }
 
-// ── Product Edit Modal ────────────────────────────────────────────────────────
+// ── Product edit modal ────────────────────────────────────────────────────────
 
 function ProductEditModal({
   open,
@@ -196,6 +213,7 @@ function ProductEditModal({
   const [brand, setBrand] = useState(product?.brand ?? '')
   const [imageUrl, setImageUrl] = useState(product?.imageUrl ?? '')
 
+  // Sync form state when a different product is opened for editing
   useEffect(() => {
     if (product && open) {
       setName(product.name)
@@ -212,7 +230,9 @@ function ProductEditModal({
         <DialogHeader>
           <DialogTitle>Edit Product</DialogTitle>
         </DialogHeader>
-        <div className="text-xs font-mono text-muted-foreground mb-3 bg-muted px-3 py-1.5 rounded">{product.barcode}</div>
+        <div className="text-xs font-mono text-muted-foreground mb-3 bg-muted px-3 py-1.5 rounded">
+          {product.barcode}
+        </div>
         <form
           onSubmit={(e) => {
             e.preventDefault()
@@ -260,7 +280,7 @@ function ProductEditModal({
   )
 }
 
-// ── Product Add Modal ─────────────────────────────────────────────────────────
+// ── Product add modal ─────────────────────────────────────────────────────────
 
 function ProductAddModal({
   open,
@@ -277,8 +297,15 @@ function ProductAddModal({
   const [imageUrl, setImageUrl] = useState('')
   const [lookupState, setLookupState] = useState<'idle' | 'looking' | 'found' | 'notfound'>('idle')
 
+  // Reset form when the modal closes
   useEffect(() => {
-    if (!open) { setName(''); setBrand(''); setBarcode(''); setImageUrl(''); setLookupState('idle') }
+    if (!open) {
+      setName('')
+      setBrand('')
+      setBarcode('')
+      setImageUrl('')
+      setLookupState('idle')
+    }
   }, [open])
 
   const handleBarcode = async (val: string) => {
@@ -321,7 +348,7 @@ function ProductAddModal({
               <p className="text-xs text-green-500 mt-1">Found — details pre-filled below</p>
             )}
             {lookupState === 'notfound' && (
-              <p className="text-xs text-muted-foreground mt-1">Not found in OpenFoodFacts — enter details below</p>
+              <p className="text-xs text-muted-foreground mt-1">Not found — enter details below</p>
             )}
           </div>
           <div>
@@ -350,4 +377,3 @@ function ProductAddModal({
     </Dialog>
   )
 }
-

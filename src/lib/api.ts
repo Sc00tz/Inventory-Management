@@ -2,6 +2,7 @@ import type { Location, Product, InventoryItem, InventoryWithProduct } from '../
 
 const BASE = '/api'
 
+// Generic fetch wrapper — throws on non-2xx responses
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method,
@@ -22,10 +23,14 @@ export function getLocation(id: string): Promise<Location | null> {
   return req<Location>('GET', `/locations/${id}`).catch(() => null)
 }
 
+// Resolves the first 8 chars of a UUID (used by QR short links)
 export function getLocationByShortId(shortId: string): Promise<Location | null> {
   return req<Location>('GET', `/locations/short/${shortId}`).catch(() => null)
 }
 
+// Client-side barcode lookup — fetches all locations then filters locally.
+// Fine for home-scale data; replace with a server-side endpoint if the
+// location count ever grows large.
 export async function getLocationByBarcode(barcode: string): Promise<Location | null> {
   const locations = await getLocations()
   return locations.find(l => l.barcode === barcode) ?? null
@@ -49,7 +54,7 @@ export function getProducts(): Promise<Product[]> {
   return req('GET', '/products')
 }
 
-export async function getProductByBarcode(barcode: string): Promise<Product | null> {
+export function getProductByBarcode(barcode: string): Promise<Product | null> {
   return req<Product>('GET', `/products/barcode/${encodeURIComponent(barcode)}`).catch(() => null)
 }
 
@@ -71,10 +76,19 @@ export function getInventoryForLocation(locationId: string): Promise<InventoryWi
   return req('GET', `/inventory/${locationId}`)
 }
 
+// Returns { [locationId]: itemCount } for every location in one request.
+// Used by the home page tree to display per-location counts without N+1 fetches.
+export function getInventoryCounts(): Promise<Record<string, number>> {
+  return req('GET', '/inventory-counts')
+}
+
+// Adjusts quantity by delta (positive = add, negative = remove).
+// The server deletes the row if quantity reaches 0.
 export function upsertInventoryItem(locationId: string, productId: string, delta: number): Promise<InventoryItem> {
   return req('POST', '/inventory/upsert', { locationId, productId, delta })
 }
 
+// Sets quantity to an exact value. Returns null when the row was deleted (qty ≤ 0).
 export async function setInventoryQuantity(id: string, quantity: number): Promise<InventoryItem | null> {
   const result = await req<InventoryItem & { deleted?: boolean }>('PUT', `/inventory/${id}/quantity`, { quantity })
   return result.deleted ? null : result
@@ -84,11 +98,10 @@ export function removeInventoryItem(id: string): Promise<void> {
   return req('DELETE', `/inventory/${id}`)
 }
 
-export function getInventoryCounts(): Promise<Record<string, number>> {
-  return req('GET', '/inventory-counts')
-}
-
-// ── OpenFoodFacts barcode lookup ───────────────────────────────────────────────
+// ── External barcode lookup ───────────────────────────────────────────────────
+// Tries three APIs in order: Open Food Facts (food/drink), Open Beauty Facts
+// (cosmetics/household), then UPC Item DB (broad US coverage, 100 req/day on
+// the free tier). Returns null if none recognise the barcode.
 
 export interface OFFProduct {
   name: string
@@ -97,7 +110,7 @@ export interface OFFProduct {
 }
 
 export async function lookupBarcode(barcode: string): Promise<OFFProduct | null> {
-  // Try Open Food Facts (food/drink)
+  // 1. Open Food Facts
   try {
     const res = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`)
     if (res.ok) {
@@ -108,9 +121,9 @@ export async function lookupBarcode(barcode: string): Promise<OFFProduct | null>
         if (name) return { name, brand: p.brands || null, imageUrl: p.image_front_thumb_url || p.image_url || null }
       }
     }
-  } catch { /* fall through */ }
+  } catch { /* fall through to next source */ }
 
-  // Try Open Beauty Facts (cosmetics/household)
+  // 2. Open Beauty Facts
   try {
     const res = await fetch(`https://world.openbeautyfacts.org/api/v0/product/${barcode}.json`)
     if (res.ok) {
@@ -121,9 +134,9 @@ export async function lookupBarcode(barcode: string): Promise<OFFProduct | null>
         if (name) return { name, brand: p.brands || null, imageUrl: p.image_front_thumb_url || null }
       }
     }
-  } catch { /* fall through */ }
+  } catch { /* fall through to next source */ }
 
-  // Try UPC Item DB (broad US product coverage, 100 req/day free)
+  // 3. UPC Item DB
   try {
     const res = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${barcode}`)
     if (res.ok) {
