@@ -61,6 +61,28 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_locations_barcode    ON locations(barcode);
 `)
 
+// node:sqlite has no better-sqlite3-style db.transaction(). This shim wraps a
+// function so all its statements commit atomically or roll back together.
+// Nested calls (e.g. recursive cascades) use SAVEPOINTs so an inner rollback
+// doesn't abort the whole outer transaction.
+let txDepth = 0
+db.transaction = (fn) => (...args) => {
+  const nested = txDepth > 0
+  const sp = `sp_${txDepth}`
+  db.exec(nested ? `SAVEPOINT ${sp}` : 'BEGIN')
+  txDepth++
+  try {
+    const result = fn(...args)
+    db.exec(nested ? `RELEASE ${sp}` : 'COMMIT')
+    return result
+  } catch (e) {
+    db.exec(nested ? `ROLLBACK TO ${sp}` : 'ROLLBACK')
+    throw e
+  } finally {
+    txDepth--
+  }
+}
+
 // ── Validation helpers ────────────────────────────────────────────────────────
 
 function requireStrings(res, obj, fields) {
