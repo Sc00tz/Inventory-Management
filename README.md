@@ -24,6 +24,47 @@ A self-hosted home inventory system with barcode scanning. Create named storage 
 
 ## Quick start (Docker)
 
+There are two ways to run ScanBin with Docker: **pull the prebuilt image** (fastest — no build step) or **build from source**.
+
+### Option A — Pull the prebuilt image (recommended)
+
+A multi-arch image (`linux/amd64` + `linux/arm64`) is published to the GitHub Container Registry on every push to `main`. Use the `docker-compose.pull.yml` in this repo, which pulls the image instead of building it:
+
+```bash
+git clone https://github.com/Sc00tz/Inventory-Management.git
+cd Inventory-Management
+docker compose -f docker-compose.pull.yml up -d
+```
+
+Or, without cloning at all, drop this `docker-compose.yml` on your host and run `docker compose up -d`:
+
+```yaml
+services:
+  app:
+    image: ghcr.io/sc00tz/inventory-management:latest
+    ports:
+      - "4000:4000"
+    volumes:
+      - inventory_data:/data
+    restart: unless-stopped
+
+volumes:
+  inventory_data:
+```
+
+**Available tags:**
+
+| Tag | Points to |
+|-----|-----------|
+| `latest` | Newest build from `main` |
+| `main` | Same as `latest` |
+| `1.2`, `1.2.3` | Release builds (created when a `v*` git tag is pushed) |
+| `sha-<short>` | A specific commit, for pinning |
+
+> **Note:** The GHCR package is private by default. Either make it public (repo → **Packages** → **Package settings** → **Change visibility → Public**) so `docker pull` works anonymously, or authenticate first with `docker login ghcr.io` using a personal access token that has the `read:packages` scope.
+
+### Option B — Build from source
+
 ```bash
 git clone https://github.com/Sc00tz/Inventory-Management.git
 cd Inventory-Management
@@ -104,12 +145,22 @@ docker compose logs -f
 
 # Stop
 docker compose down
+```
 
-# Update to latest build
+**Updating to the latest version:**
+
+```bash
+# If using the prebuilt image (Option A)
+docker compose -f docker-compose.pull.yml pull
+docker compose -f docker-compose.pull.yml up -d
+
+# If building from source (Option B)
 docker compose down
 docker compose build --no-cache
 docker compose up -d
 ```
+
+Your data lives in the `inventory_data` volume and is untouched by updates.
 
 ### Development (with live reload)
 
@@ -132,6 +183,21 @@ docker run --rm -v inventory_data:/data -v $(pwd):/backup alpine \
 docker run --rm -v inventory_data:/data -v $(pwd):/backup alpine \
   cp /backup/inventory-backup.db /data/inventory.db
 ```
+
+---
+
+## Continuous builds & releases
+
+Pushes to `main` trigger the [`docker-publish.yml`](.github/workflows/docker-publish.yml) GitHub Actions workflow, which builds the multi-arch image and pushes it to GHCR as `latest` / `main` / `sha-<short>`. No secrets are required — it authenticates with the built-in `GITHUB_TOKEN`.
+
+To cut a versioned release, push a git tag:
+
+```bash
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+This publishes `ghcr.io/sc00tz/inventory-management:1.2.3` and `:1.2` in addition to `latest`. You can also trigger a build manually from the repo's **Actions** tab (**Run workflow**).
 
 ---
 
@@ -247,6 +313,9 @@ All endpoints are prefixed with `/api`.
 │       ├── LocationFormModal.tsx # Create/edit location form
 │       └── dialog.tsx            # Dialog wrapper
 ├── Dockerfile
-├── docker-compose.yml         # Production
-└── docker-compose.dev.yml     # Development (live reload)
+├── docker-compose.yml         # Production — builds from source
+├── docker-compose.pull.yml    # Production — pulls prebuilt GHCR image
+├── docker-compose.dev.yml     # Development (live reload)
+└── .github/workflows/
+    └── docker-publish.yml     # Auto-build & publish image to GHCR
 ```
