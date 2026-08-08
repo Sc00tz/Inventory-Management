@@ -1,4 +1,4 @@
-import type { Location, Product, InventoryItem, InventoryWithProduct } from '../types'
+import type { Location, Product, InventoryItem, InventoryWithProduct, InventorySearchResult } from '../types'
 
 const BASE = '/api'
 
@@ -76,6 +76,12 @@ export function getInventoryForLocation(locationId: string): Promise<InventoryWi
 // Used by the home page tree to display per-location counts without N+1 fetches.
 export function getInventoryCounts(): Promise<Record<string, number>> {
   return req('GET', '/inventory-counts')
+}
+
+// Searches the entire inventory by product name, brand, or barcode.
+// Returns one row per (product, location) match with the quantity there.
+export function searchInventory(query: string): Promise<InventorySearchResult[]> {
+  return req('GET', `/inventory/search?q=${encodeURIComponent(query)}`)
 }
 
 // Adjusts quantity by delta (positive = add, negative = remove).

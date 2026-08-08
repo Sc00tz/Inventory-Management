@@ -281,6 +281,44 @@ app.get('/api/inventory-counts', (req, res) => {
 
 // ── Inventory ─────────────────────────────────────────────────────────────────
 
+// Full-inventory search across all locations. Matches the query against product
+// name, brand, and barcode; returns one row per (product, location) with the
+// quantity there. Registered BEFORE /api/inventory/:locationId so "search" isn't
+// mistaken for a locationId.
+app.get('/api/inventory/search', (req, res) => {
+  try {
+    const q = String(req.query.q ?? '').trim()
+    if (!q) return res.json([])
+
+    const like = `%${q.replace(/[%_]/g, '\\$&')}%`
+    const rows = db.prepare(`
+      SELECT
+        i.id         AS inventoryId,
+        i.quantity   AS quantity,
+        i.locationId AS locationId,
+        l.name       AS locationName,
+        l.color      AS locationColor,
+        l.type       AS locationType,
+        p.id         AS productId,
+        p.barcode    AS barcode,
+        p.name       AS name,
+        p.brand      AS brand,
+        p.imageUrl   AS imageUrl
+      FROM inventory i
+      JOIN products p  ON i.productId  = p.id
+      JOIN locations l ON i.locationId = l.id
+      WHERE p.name LIKE ? ESCAPE '\\'
+         OR p.brand LIKE ? ESCAPE '\\'
+         OR p.barcode LIKE ? ESCAPE '\\'
+      ORDER BY p.name COLLATE NOCASE ASC, l.name COLLATE NOCASE ASC
+    `).all(like, like, like)
+
+    res.json(rows)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 app.get('/api/inventory/:locationId', (req, res) => {
   try {
     const rows = db.prepare(`

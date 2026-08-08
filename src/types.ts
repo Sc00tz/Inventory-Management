@@ -41,3 +41,18 @@ export interface InventoryItem {
 export interface InventoryWithProduct extends InventoryItem {
   product: Product
 }
+
+/** One (product, location) match from the full-inventory search endpoint. */
+export interface InventorySearchResult {
+  inventoryId: string
+  quantity: number
+  locationId: string
+  locationName: string
+  locationColor: string
+  locationType: LocationType
+  productId: string
+  barcode: string
+  name: string
+  brand: string | null
+  imageUrl: string | null
+}

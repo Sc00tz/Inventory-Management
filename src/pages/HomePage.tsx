@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { Plus, ScanBarcode, ChevronRight, ChevronDown, Box, Home, Layers } from 'lucide-react'
+import { Plus, ScanBarcode, ChevronRight, ChevronDown, Box, Home, Layers, Search, X } from 'lucide-react'
 import { Archive, Refrigerator, Snowflake, Package2, BookOpen } from 'lucide-react'
 import { Button, toast } from '@blinkdotnew/ui'
 import { ScanInput } from '../components/ScanInput'
 import { LocationFormModal } from '../components/LocationFormModal'
-import { getLocations, getLocationByBarcode, getLocationByShortId, createLocation, getInventoryCounts } from '../lib/api'
-import type { Location, LocationType } from '../types'
+import { getLocations, getLocationByBarcode, getLocationByShortId, createLocation, getInventoryCounts, searchInventory } from '../lib/api'
+import type { Location, LocationType, InventorySearchResult } from '../types'
 
 // Map of location type → icon component
 const TYPE_ICONS: Record<string, React.FC<{ size?: number; className?: string }>> = {
@@ -100,6 +100,96 @@ function LocationTreeNode({ location, allLocations, counts, depth, expanded, onT
   )
 }
 
+// Debounces a rapidly-changing value so we don't fire a search request per keystroke.
+function useDebounced<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay)
+    return () => clearTimeout(t)
+  }, [value, delay])
+  return debounced
+}
+
+// ── Search results ──────────────────────────────────────────────────────────────
+
+interface GroupedProduct {
+  productId: string
+  name: string
+  brand: string | null
+  imageUrl: string | null
+  total: number
+  locations: InventorySearchResult[]
+}
+
+// Collapses the flat (product, location) rows into one card per product,
+// summing quantities into a total and keeping the per-location breakdown.
+function groupByProduct(rows: InventorySearchResult[]): GroupedProduct[] {
+  const map = new Map<string, GroupedProduct>()
+  for (const r of rows) {
+    let g = map.get(r.productId)
+    if (!g) {
+      g = { productId: r.productId, name: r.name, brand: r.brand, imageUrl: r.imageUrl, total: 0, locations: [] }
+      map.set(r.productId, g)
+    }
+    g.total += r.quantity
+    g.locations.push(r)
+  }
+  return [...map.values()]
+}
+
+function SearchResults({ rows, onNavigate }: { rows: InventorySearchResult[]; onNavigate: (id: string) => void }) {
+  const groups = groupByProduct(rows)
+
+  if (groups.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-border py-12 text-center">
+        <p className="text-sm text-muted-foreground">No items match your search.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-xl border border-border overflow-hidden divide-y divide-border">
+      {groups.map(g => (
+        <div key={g.productId} className="p-3">
+          <div className="flex items-center gap-3">
+            {g.imageUrl ? (
+              <img src={g.imageUrl} alt="" className="w-10 h-10 rounded-md object-cover shrink-0 bg-muted" />
+            ) : (
+              <div className="w-10 h-10 rounded-md bg-muted flex items-center justify-center shrink-0">
+                <Box size={16} className="text-muted-foreground" />
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium text-foreground truncate">{g.name}</div>
+              {g.brand && <div className="text-xs text-muted-foreground truncate">{g.brand}</div>}
+            </div>
+            <div className="text-right shrink-0">
+              <div className="text-sm font-semibold text-foreground">{g.total}</div>
+              <div className="text-xs text-muted-foreground">total</div>
+            </div>
+          </div>
+
+          {/* Per-location breakdown — each chip opens that location */}
+          <div className="flex flex-wrap gap-1.5 mt-2.5 pl-[3.25rem]">
+            {g.locations.map(loc => (
+              <button
+                key={loc.inventoryId}
+                onClick={() => onNavigate(loc.locationId)}
+                className="flex items-center gap-1.5 rounded-full border border-border bg-muted/40 pl-2 pr-2.5 py-1 text-xs hover:bg-muted transition-colors"
+              >
+                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: loc.locationColor }} />
+                <span className="text-foreground truncate max-w-[10rem]">{loc.locationName}</span>
+                <span className="text-muted-foreground">×{loc.quantity}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export function HomePage() {
@@ -107,7 +197,11 @@ export function HomePage() {
   const queryClient = useQueryClient()
   const [showNewModal, setShowNewModal] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [search, setSearch] = useState('')
   const didAutoExpand = useRef(false)
+
+  const debouncedSearch = useDebounced(search.trim(), 250)
+  const isSearching = debouncedSearch.length > 0
 
   const { data: locations = [], isLoading } = useQuery({
     queryKey: ['locations'],
@@ -117,6 +211,12 @@ export function HomePage() {
   const { data: counts = {} } = useQuery({
     queryKey: ['inventory-counts'],
     queryFn: getInventoryCounts,
+  })
+
+  const { data: searchResults = [], isFetching: isSearchFetching } = useQuery({
+    queryKey: ['inventory-search', debouncedSearch],
+    queryFn: () => searchInventory(debouncedSearch),
+    enabled: isSearching,
   })
 
   const topLevel = locations.filter(l => !l.parentId)
@@ -189,6 +289,27 @@ export function HomePage() {
         </Button>
       </div>
 
+      {/* Search the entire inventory by product name, brand, or barcode */}
+      <div className="relative">
+        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search all inventory by name, brand, or barcode…"
+          className="w-full rounded-xl border border-border bg-background pl-9 pr-9 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+        />
+        {search && (
+          <button
+            onClick={() => setSearch('')}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            aria-label="Clear search"
+          >
+            <X size={14} />
+          </button>
+        )}
+      </div>
+
       {/* Scan box — opens the matching location from a QR code or barcode */}
       <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
         <div className="flex items-center gap-2 mb-3">
@@ -199,8 +320,21 @@ export function HomePage() {
         <p className="text-xs text-muted-foreground mt-2">Barcode scanners send Enter automatically. Or type and press Enter.</p>
       </div>
 
-      {/* Location tree */}
-      {isLoading ? (
+      {/* Search results replace the tree while a query is active */}
+      {isSearching ? (
+        isSearchFetching && searchResults.length === 0 ? (
+          <div className="space-y-2">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="h-16 rounded-lg bg-muted animate-pulse" />
+            ))}
+          </div>
+        ) : (
+          <SearchResults
+            rows={searchResults}
+            onNavigate={(id) => navigate({ to: '/locations/$id', params: { id } as never })}
+          />
+        )
+      ) : isLoading ? (
         <div className="space-y-2">
           {[...Array(4)].map((_, i) => (
             <div key={i} className="h-10 rounded-lg bg-muted animate-pulse" />
