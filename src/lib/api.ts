@@ -101,9 +101,9 @@ export function removeInventoryItem(id: string): Promise<void> {
 }
 
 // ── External barcode lookup ───────────────────────────────────────────────────
-// Tries three APIs in order: Open Food Facts (food/drink), Open Beauty Facts
-// (cosmetics/household), then UPC Item DB (broad US coverage, 100 req/day on
-// the free tier). Returns null if none recognise the barcode.
+// The lookup runs server-side (GET /api/lookup/:barcode) so API keys stay secret
+// and CORS-restricted sources work. The server tries several free databases in
+// order — see server.js for the source chain. Returns null if none match.
 
 export interface OFFProduct {
   name: string
@@ -112,45 +112,11 @@ export interface OFFProduct {
 }
 
 export async function lookupBarcode(barcode: string): Promise<OFFProduct | null> {
-  // 1. Open Food Facts
   try {
-    const res = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`)
-    if (res.ok) {
-      const data = await res.json()
-      if (data.status === 1) {
-        const p = data.product
-        const name = p.product_name || p.product_name_en || ''
-        if (name) return { name, brand: p.brands || null, imageUrl: p.image_front_thumb_url || p.image_url || null }
-      }
-    }
-  } catch { /* fall through to next source */ }
-
-  // 2. Open Beauty Facts
-  try {
-    const res = await fetch(`https://world.openbeautyfacts.org/api/v0/product/${barcode}.json`)
-    if (res.ok) {
-      const data = await res.json()
-      if (data.status === 1) {
-        const p = data.product
-        const name = p.product_name || ''
-        if (name) return { name, brand: p.brands || null, imageUrl: p.image_front_thumb_url || null }
-      }
-    }
-  } catch { /* fall through to next source */ }
-
-  // 3. UPC Item DB
-  try {
-    const res = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${barcode}`)
-    if (res.ok) {
-      const data = await res.json()
-      const item = data.items?.[0]
-      if (item?.title) return {
-        name: item.title,
-        brand: item.brand || null,
-        imageUrl: item.images?.[0] || null,
-      }
-    }
-  } catch { /* fall through */ }
-
-  return null
+    const res = await fetch(`${BASE}/lookup/${encodeURIComponent(barcode)}`)
+    if (!res.ok) return null
+    return await res.json()
+  } catch {
+    return null
+  }
 }

@@ -6,6 +6,10 @@ services:
     volumes:
       - inventory_data:/data
     restart: unless-stopped
+    environment:
+      # Optional: free key from https://upcdatabase.org for general-merchandise
+      # barcode coverage. Set it in a .env file or your shell; blank = skipped.
+      - UPCDATABASE_API_KEY=${UPCDATABASE_API_KEY:-}
     healthcheck:
       # Hits a fast, DB-exercising endpoint — if this fails, the container restarts
       test: ["CMD", "wget", "-qO-", "http://localhost:4000/api/inventory-counts"]

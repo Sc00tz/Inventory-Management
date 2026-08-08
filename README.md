@@ -129,6 +129,19 @@ All configuration is via environment variables.
 |----------|---------|-------------|
 | `PORT` | `4000` | Port the server listens on |
 | `DB_PATH` | `/data/inventory.db` | Path to the SQLite database file |
+| `UPCDATABASE_API_KEY` | _(unset)_ | Optional free key from [upcdatabase.org](https://upcdatabase.org) for general-merchandise barcode coverage — see below |
+
+### Barcode lookup sources
+
+When you scan an unknown barcode, the server resolves it against several free product databases in order:
+
+1. **Open Food Facts** — food & drink
+2. **Open Beauty Facts** — cosmetics & personal care
+3. **Open Products Facts** — general products in the Open*Facts project
+4. **UPCdatabase.org** — broad general-merchandise coverage *(only if `UPCDATABASE_API_KEY` is set)*
+5. **UPCitemdb** (trial) — general fallback, ~100 lookups/day
+
+The Open*Facts databases (1–3) are free and need no key, but they mostly cover food and cosmetics. For **electronics, tools, toys, and household goods**, register for a free key at [upcdatabase.org](https://upcdatabase.org) (free tier: 100 lookups/day) and set `UPCDATABASE_API_KEY`. Copy [`.env.example`](.env.example) to `.env` and fill it in — `docker compose` picks it up automatically. Lookups still work without a key; you'll just get fewer matches on non-food items.
 
 ---
 

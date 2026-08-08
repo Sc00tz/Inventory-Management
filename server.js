@@ -10,6 +10,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
 const PORT = process.env.PORT || 4000
 const DB_PATH = process.env.DB_PATH || '/data/inventory.db'
+// Optional free key from https://upcdatabase.org — adds general-merchandise
+// coverage (electronics, tools, household) the Open*Facts DBs don't carry.
+const UPCDB_KEY = process.env.UPCDATABASE_API_KEY || ''
 
 app.use(express.json())
 
@@ -111,6 +114,90 @@ app.get('/api/qr', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
+})
+
+// ── Barcode lookup ──────────────────────────────────────────────────────────────
+// Resolves a barcode to { name, brand, imageUrl } by trying several free product
+// databases in order. Runs server-side (not in the browser) so that: the
+// UPCDATABASE_API_KEY stays secret, and sources with restrictive CORS (e.g.
+// UPCitemdb, which only allows its own origin) actually work.
+//
+// Order: Open Food Facts → Open Beauty Facts → Open Products Facts (all free,
+// no key, but food/cosmetics/general-OFF only) → UPCdatabase.org (needs a free
+// key, broad general-merchandise coverage) → UPCitemdb trial (100/day, no key).
+
+const LOOKUP_UA = 'ScanBin/1.0 (self-hosted inventory app)'
+
+// Each source returns { name, brand, imageUrl } on a hit, or null to fall through.
+async function fromOpenFacts(host, barcode) {
+  const res = await fetch(`https://${host}/api/v2/product/${barcode}.json`, {
+    headers: { 'User-Agent': LOOKUP_UA },
+  })
+  if (!res.ok) return null
+  const data = await res.json()
+  if (data.status !== 1 || !data.product) return null
+  const p = data.product
+  const name = p.product_name || p.product_name_en || ''
+  if (!name) return null
+  return {
+    name,
+    brand: p.brands || null,
+    imageUrl: p.image_front_thumb_url || p.image_front_url || p.image_url || null,
+  }
+}
+
+async function fromUpcDatabase(barcode) {
+  if (!UPCDB_KEY) return null
+  // Key is passed as the ?apikey= query param (the Bearer-header form documented
+  // on the site returns "invalid key format").
+  const res = await fetch(`https://api.upcdatabase.org/product/${barcode}?apikey=${UPCDB_KEY}`, {
+    headers: { 'User-Agent': LOOKUP_UA },
+  })
+  if (!res.ok) return null
+  const data = await res.json()
+  if (data.success !== true || !data.title) return null
+  return {
+    name: data.title,
+    brand: data.brand || data.manufacturer || null,
+    imageUrl: Array.isArray(data.images) && data.images.length ? data.images[0] : null,
+  }
+}
+
+async function fromUpcItemDb(barcode) {
+  const res = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${barcode}`, {
+    headers: { 'User-Agent': LOOKUP_UA },
+  })
+  if (!res.ok) return null
+  const data = await res.json()
+  const item = data.items?.[0]
+  if (!item?.title) return null
+  return {
+    name: item.title,
+    brand: item.brand || null,
+    imageUrl: Array.isArray(item.images) && item.images.length ? item.images[0] : null,
+  }
+}
+
+app.get('/api/lookup/:barcode', async (req, res) => {
+  const { barcode } = req.params
+  if (!/^[0-9]{6,14}$/.test(barcode)) return res.status(400).json({ error: 'Invalid barcode' })
+
+  const sources = [
+    () => fromOpenFacts('world.openfoodfacts.org', barcode),
+    () => fromOpenFacts('world.openbeautyfacts.org', barcode),
+    () => fromOpenFacts('world.openproductsfacts.org', barcode),
+    () => fromUpcDatabase(barcode),
+    () => fromUpcItemDb(barcode),
+  ]
+
+  for (const source of sources) {
+    try {
+      const hit = await source()
+      if (hit) return res.json(hit)
+    } catch { /* network/parse error — try the next source */ }
+  }
+
+  res.status(404).json({ error: 'Not found' })
 })
 
 // ── Short URL redirect ────────────────────────────────────────────────────────
