@@ -7,6 +7,8 @@ import { ScanInput } from '../components/ScanInput'
 import { CameraScanner } from '../components/CameraScanner'
 import { getProducts, updateProduct, deleteProduct, createProduct, lookupBarcode } from '../lib/api'
 import type { Product } from '../types'
+import { PackFields, EMPTY_PACK, packFromProduct, packToApi, isPackValid, type PackValue } from '../components/PackFields'
+import { describeQuantity, isMultipack } from '../lib/quantity'
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -36,6 +38,7 @@ export function ProductsPage() {
     mutationFn: ({ id, data }: { id: string; data: Partial<Product> }) => updateProduct(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['products'] })
+      queryClient.invalidateQueries({ queryKey: ['inventory'] })
       setEditProduct(null)
       toast.success('Product updated')
     },
@@ -136,6 +139,9 @@ export function ProductsPage() {
                   <div className="flex items-center gap-2 mt-0.5">
                     {product.brand && <span className="text-xs text-muted-foreground">{product.brand}</span>}
                     <span className="text-xs font-mono text-muted-foreground/50">{product.barcode}</span>
+                    {isMultipack(product) && (
+                      <span className="text-xs text-primary/90">pack of {describeQuantity(product, product.packSize).count}</span>
+                    )}
                   </div>
                 </div>
 
@@ -212,6 +218,7 @@ function ProductEditModal({
   const [name, setName] = useState(product?.name ?? '')
   const [brand, setBrand] = useState(product?.brand ?? '')
   const [imageUrl, setImageUrl] = useState(product?.imageUrl ?? '')
+  const [pack, setPack] = useState<PackValue>(packFromProduct(product))
 
   // Sync form state when a different product is opened for editing
   useEffect(() => {
@@ -219,6 +226,7 @@ function ProductEditModal({
       setName(product.name)
       setBrand(product.brand || '')
       setImageUrl(product.imageUrl || '')
+      setPack(packFromProduct(product))
     }
   }, [product, open])
 
@@ -236,7 +244,8 @@ function ProductEditModal({
         <form
           onSubmit={(e) => {
             e.preventDefault()
-            onSave({ name: name.trim(), brand: brand.trim() || null, imageUrl: imageUrl.trim() || null })
+            if (!isPackValid(pack)) return
+            onSave({ name: name.trim(), brand: brand.trim() || null, imageUrl: imageUrl.trim() || null, ...packToApi(pack) })
           }}
           className="flex flex-col gap-3"
         >
@@ -270,9 +279,16 @@ function ProductEditModal({
               className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
           </div>
+          <PackFields
+            value={pack}
+            onChange={setPack}
+            convertNote={!isMultipack(product) && pack.enabled
+              ? `Stock you already have will be converted: each package counted so far becomes ${pack.size || 'N'} ${pack.unitName.trim() || 'units'}.`
+              : null}
+          />
           <div className="flex gap-2 mt-1">
             <Button type="button" variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
-            <Button type="submit" className="flex-1">Save</Button>
+            <Button type="submit" className="flex-1" disabled={!isPackValid(pack)}>Save</Button>
           </div>
         </form>
       </DialogContent>
@@ -295,6 +311,7 @@ function ProductAddModal({
   const [brand, setBrand] = useState('')
   const [barcode, setBarcode] = useState('')
   const [imageUrl, setImageUrl] = useState('')
+  const [pack, setPack] = useState<PackValue>(EMPTY_PACK)
   const [lookupState, setLookupState] = useState<'idle' | 'looking' | 'found' | 'notfound'>('idle')
 
   // Reset form when the modal closes
@@ -304,6 +321,7 @@ function ProductAddModal({
       setBrand('')
       setBarcode('')
       setImageUrl('')
+      setPack(EMPTY_PACK)
       setLookupState('idle')
     }
   }, [open])
@@ -331,7 +349,8 @@ function ProductAddModal({
         <form
           onSubmit={(e) => {
             e.preventDefault()
-            onSave({ barcode: barcode.trim(), name: name.trim(), brand: brand.trim() || null, imageUrl: imageUrl || null })
+            if (!isPackValid(pack)) return
+            onSave({ barcode: barcode.trim(), name: name.trim(), brand: brand.trim() || null, imageUrl: imageUrl || null, ...packToApi(pack) })
           }}
           className="flex flex-col gap-3"
         >
@@ -368,9 +387,10 @@ function ProductAddModal({
               className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
           </div>
+          <PackFields value={pack} onChange={setPack} />
           <div className="flex gap-2 mt-1">
             <Button type="button" variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
-            <Button type="submit" className="flex-1" disabled={!barcode.trim() || !name.trim()}>Add</Button>
+            <Button type="submit" className="flex-1" disabled={!barcode.trim() || !name.trim() || !isPackValid(pack)}>Add</Button>
           </div>
         </form>
       </DialogContent>

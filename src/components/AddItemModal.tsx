@@ -3,6 +3,7 @@ import { Button } from '@blinkdotnew/ui'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './dialog'
 import { Search, Package } from 'lucide-react'
 import type { Product } from '../types'
+import { isMultipack, unitLabel } from '../lib/quantity'
 
 interface AddItemModalProps {
   open: boolean
@@ -15,6 +16,8 @@ export function AddItemModal({ open, products, onAdd, onClose }: AddItemModalPro
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Product | null>(null)
   const [quantity, setQuantity] = useState('1')
+  // For multipacks: is the typed quantity whole packs or single units?
+  const [inPacks, setInPacks] = useState(true)
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
@@ -31,6 +34,7 @@ export function AddItemModal({ open, products, onAdd, onClose }: AddItemModalPro
     setSearch('')
     setSelected(null)
     setQuantity('1')
+    setInPacks(true)
     onClose()
   }
 
@@ -38,7 +42,8 @@ export function AddItemModal({ open, products, onAdd, onClose }: AddItemModalPro
     if (!selected) return
     const qty = parseFloat(quantity)
     if (isNaN(qty) || qty <= 0) return
-    onAdd(selected, qty)
+    // Inventory for multipacks is stored in units
+    onAdd(selected, isMultipack(selected) && inPacks ? qty * selected.packSize : qty)
     handleClose()
   }
 
@@ -132,6 +137,20 @@ export function AddItemModal({ open, products, onAdd, onClose }: AddItemModalPro
                 onKeyDown={e => e.key === 'Enter' && handleConfirm()}
                 className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
               />
+              {isMultipack(selected) && (
+                <div className="flex gap-1 mt-2 text-xs">
+                  {[true, false].map(packs => (
+                    <button
+                      key={String(packs)}
+                      type="button"
+                      onClick={() => setInPacks(packs)}
+                      className={`flex-1 rounded-md border px-2 py-1.5 transition-colors ${inPacks === packs ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground hover:text-foreground'}`}
+                    >
+                      {packs ? `Packs (${selected.packSize} each)` : `Single ${unitLabel(selected, 2)}`}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="flex gap-2">

@@ -23,6 +23,10 @@ export interface Product {
   name: string
   brand: string | null
   imageUrl: string | null
+  /** Units inside one package (e.g. 18 sleeves in a box). null = single item. */
+  packSize?: number | null
+  /** What one unit is called, e.g. "sleeve". Only used when packSize is set. */
+  unitName?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -55,6 +59,8 @@ export interface InventorySearchResult {
   name: string
   brand: string | null
   imageUrl: string | null
+  packSize: number | null
+  unitName: string | null
 }
 
 /** App-wide settings stored server-side. */

@@ -70,6 +70,16 @@ db.exec(`
   );
 `)
 
+// ── Migrations ────────────────────────────────────────────────────────────────
+// Multipacks: a product can contain N smaller units (e.g. a box of 18 sleeves).
+// When packSize is set, inventory quantities for that product are counted in
+// units (sleeves), not packages.
+{
+  const cols = db.prepare('PRAGMA table_info(products)').all().map(c => c.name)
+  if (!cols.includes('packSize')) db.exec('ALTER TABLE products ADD COLUMN packSize INTEGER')
+  if (!cols.includes('unitName')) db.exec('ALTER TABLE products ADD COLUMN unitName TEXT')
+}
+
 // node:sqlite has no better-sqlite3-style db.transaction(). This shim wraps a
 // function so all its statements commit atomically or roll back together.
 // Nested calls (e.g. recursive cascades) use SAVEPOINTs so an inner rollback
@@ -102,6 +112,20 @@ function requireStrings(res, obj, fields) {
     }
   }
   return true
+}
+
+// packSize: whole number 2–10000, or null for a single item. unitName: short label.
+function parsePackFields(body) {
+  let packSize = body.packSize
+  if (packSize === '' || packSize === undefined || packSize === null || Number(packSize) <= 1) packSize = null
+  else {
+    packSize = Number(packSize)
+    if (!Number.isInteger(packSize) || packSize > 10000) return { error: 'packSize must be a whole number between 2 and 10000' }
+  }
+  const unitName = packSize && typeof body.unitName === 'string' && body.unitName.trim()
+    ? body.unitName.trim().slice(0, 40)
+    : null
+  return { packSize, unitName }
 }
 
 // ── QR code ───────────────────────────────────────────────────────────────────
@@ -323,18 +347,42 @@ app.post('/api/products', (req, res) => {
   if (!requireStrings(res, req.body, ['barcode', 'name'])) return
   try {
     const { barcode, name, brand, imageUrl } = req.body
+    const pack = parsePackFields(req.body)
+    if (pack.error) return res.status(400).json({ error: pack.error })
     const id = randomUUID()
     const now = new Date().toISOString()
 
     db.prepare(`
-      INSERT INTO products (id, barcode, name, brand, imageUrl, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, barcode, name, brand || null, imageUrl || null, now, now)
+      INSERT INTO products (id, barcode, name, brand, imageUrl, packSize, unitName, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, barcode, name, brand || null, imageUrl || null, pack.packSize, pack.unitName, now, now)
 
     res.json(db.prepare('SELECT * FROM products WHERE id = ?').get(id))
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
+})
+
+// Updates a product. Pack fields are only touched when packSize is in the body.
+// Turning a single item into a multipack converts existing stock: counts were
+// whole packages, so 2 boxes becomes 2 × 18 = 36 sleeves. Changing an existing
+// pack size or removing it keeps unit counts as they are.
+const updateProductTx = db.transaction((id, body, pack) => {
+  const now = new Date().toISOString()
+  const before = db.prepare('SELECT * FROM products WHERE id = ?').get(id)
+  const packSize = pack ? pack.packSize : before.packSize
+  const unitName = pack ? pack.unitName : before.unitName
+
+  db.prepare(`
+    UPDATE products
+    SET name=?, brand=?, imageUrl=?, packSize=?, unitName=?, updatedAt=?
+    WHERE id=?
+  `).run(body.name, body.brand || null, body.imageUrl || null, packSize, unitName, now, id)
+
+  if (!before.packSize && packSize) {
+    db.prepare('UPDATE inventory SET quantity = quantity * ?, updatedAt = ? WHERE productId = ?').run(packSize, now, id)
+  }
+  return db.prepare('SELECT * FROM products WHERE id = ?').get(id)
 })
 
 app.put('/api/products/:id', (req, res) => {
@@ -343,16 +391,12 @@ app.put('/api/products/:id', (req, res) => {
     const existing = db.prepare('SELECT id FROM products WHERE id = ?').get(req.params.id)
     if (!existing) return res.status(404).json({ error: 'Not found' })
 
-    const { name, brand, imageUrl } = req.body
-    const now = new Date().toISOString()
-
-    db.prepare(`
-      UPDATE products
-      SET name=?, brand=?, imageUrl=?, updatedAt=?
-      WHERE id=?
-    `).run(name, brand || null, imageUrl || null, now, req.params.id)
-
-    res.json(db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id))
+    let pack = null
+    if ('packSize' in req.body) {
+      pack = parsePackFields(req.body)
+      if (pack.error) return res.status(400).json({ error: pack.error })
+    }
+    res.json(updateProductTx(req.params.id, req.body, pack))
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -396,7 +440,9 @@ app.get('/api/inventory/search', (req, res) => {
         p.barcode    AS barcode,
         p.name       AS name,
         p.brand      AS brand,
-        p.imageUrl   AS imageUrl
+        p.imageUrl   AS imageUrl,
+        p.packSize   AS packSize,
+        p.unitName   AS unitName
       FROM inventory i
       JOIN products p  ON i.productId  = p.id
       JOIN locations l ON i.locationId = l.id
@@ -421,6 +467,8 @@ app.get('/api/inventory/:locationId', (req, res) => {
         p.name      AS p_name,
         p.brand     AS p_brand,
         p.imageUrl  AS p_imageUrl,
+        p.packSize  AS p_packSize,
+        p.unitName  AS p_unitName,
         p.createdAt AS p_createdAt,
         p.updatedAt AS p_updatedAt
       FROM inventory i
@@ -443,6 +491,8 @@ app.get('/api/inventory/:locationId', (req, res) => {
         name:      r.p_name,
         brand:     r.p_brand,
         imageUrl:  r.p_imageUrl,
+        packSize:  r.p_packSize,
+        unitName:  r.p_unitName,
         createdAt: r.p_createdAt,
         updatedAt: r.p_updatedAt,
       },

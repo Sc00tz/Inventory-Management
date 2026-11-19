@@ -10,6 +10,7 @@ import { AddItemModal } from '../components/AddItemModal'
 import { LocationFormModal } from '../components/LocationFormModal'
 import { NfcWriter } from '../components/NfcWriter'
 import { useSettings, resolveBaseUrl, locationShortUrl, isLocalOnly } from '../lib/settings'
+import { describeQuantity, isMultipack, unitsPerScan } from '../lib/quantity'
 import {
   getLocation,
   getLocations,
@@ -176,8 +177,11 @@ export function LocationPage() {
     try {
       const existing = await getProductByBarcode(barcode)
       if (existing) {
-        await adjustMutation.mutateAsync({ productId: existing.id, delta: 1 })
-        toast.success(`+1 ${existing.name}`)
+        // A multipack scan adds every unit in the package
+        await adjustMutation.mutateAsync({ productId: existing.id, delta: unitsPerScan(existing) })
+        toast.success(isMultipack(existing)
+          ? `+1 pack ${existing.name} (${describeQuantity(existing, existing.packSize).count})`
+          : `+1 ${existing.name}`)
       } else {
         // Unknown barcode — prompt the user to name the new product
         setPendingScan({ barcode })
@@ -189,12 +193,18 @@ export function LocationPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location?.id])
 
-  const handleNewProduct = async (name: string, brand: string, barcode: string) => {
+  const handleNewProduct = async (
+    name: string, brand: string, barcode: string,
+    pack: { packSize: number | null; unitName: string | null },
+  ) => {
     try {
-      const product = await createProduct({ barcode, name, brand: brand || null, imageUrl: null })
+      const product = await createProduct({ barcode, name, brand: brand || null, imageUrl: null, ...pack })
+      queryClient.invalidateQueries({ queryKey: ['products'] })
       // adjustMutation.onSuccess already calls invalidateInventory — no manual invalidate needed
-      await adjustMutation.mutateAsync({ productId: product.id, delta: 1 })
-      toast.success(`+1 ${product.name}`)
+      await adjustMutation.mutateAsync({ productId: product.id, delta: unitsPerScan(product) })
+      toast.success(isMultipack(product)
+        ? `+1 pack ${product.name} (${describeQuantity(product, product.packSize).count})`
+        : `+1 ${product.name}`)
       setPendingScan(null)
     } catch {
       toast.error('Failed to add product')
@@ -366,7 +376,7 @@ export function LocationPage() {
         </div>
         <ScanInput onScan={handleScan} placeholder="Scan product barcode to add…" autoFocus closeOnScan />
         <p className="text-xs text-muted-foreground mt-2">
-          Scan adds 1. Unknown barcodes prompt for a product name. First-time items are remembered.
+          Scan adds 1 (a whole pack for multipacks). Unknown barcodes prompt for a product name. First-time items are remembered.
         </p>
       </div>
 
@@ -493,6 +503,8 @@ function InventoryRow({ item, onAdjust, onSetQty, onRemove }: InventoryRowProps)
     Number(item.quantity) % 1 === 0 ? Math.floor(Number(item.quantity)) : item.quantity,
     [item.quantity]
   )
+  // Multipacks: quantity is in units; show e.g. "36 sleeves · 2 packs"
+  const qtyInfo = describeQuantity(item.product, Number(item.quantity))
 
   return (
     <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors group">
@@ -511,6 +523,9 @@ function InventoryRow({ item, onAdjust, onSetQty, onRemove }: InventoryRowProps)
           )}
           <span className="text-xs font-mono text-muted-foreground/50">{item.product.barcode}</span>
         </div>
+        {qtyInfo.detail && (
+          <p className="text-xs text-primary/90 mt-0.5">{qtyInfo.count} · {qtyInfo.detail}</p>
+        )}
       </div>
 
       {/* Quantity controls */}

@@ -9,6 +9,7 @@ import { LocationFormModal } from '../components/LocationFormModal'
 import { getLocations, getLocationByBarcode, getLocationByShortId, createLocation, getInventoryCounts, searchInventory } from '../lib/api'
 import type { Location, LocationType, InventorySearchResult } from '../types'
 import { nfcSupport, readNfcOnce, nfcErrorMessage } from '../lib/nfc'
+import { describeQuantity } from '../lib/quantity'
 
 // Map of location type → icon component
 const TYPE_ICONS: Record<string, React.FC<{ size?: number; className?: string }>> = {
@@ -118,6 +119,8 @@ interface GroupedProduct {
   name: string
   brand: string | null
   imageUrl: string | null
+  packSize: number | null
+  unitName: string | null
   total: number
   locations: InventorySearchResult[]
 }
@@ -129,7 +132,7 @@ function groupByProduct(rows: InventorySearchResult[]): GroupedProduct[] {
   for (const r of rows) {
     let g = map.get(r.productId)
     if (!g) {
-      g = { productId: r.productId, name: r.name, brand: r.brand, imageUrl: r.imageUrl, total: 0, locations: [] }
+      g = { productId: r.productId, name: r.name, brand: r.brand, imageUrl: r.imageUrl, packSize: r.packSize, unitName: r.unitName, total: 0, locations: [] }
       map.set(r.productId, g)
     }
     g.total += r.quantity
@@ -166,8 +169,8 @@ function SearchResults({ rows, onNavigate }: { rows: InventorySearchResult[]; on
               {g.brand && <div className="text-xs text-muted-foreground truncate">{g.brand}</div>}
             </div>
             <div className="text-right shrink-0">
-              <div className="text-sm font-semibold text-foreground">{g.total}</div>
-              <div className="text-xs text-muted-foreground">total</div>
+              <div className="text-sm font-semibold text-foreground">{describeQuantity(g, g.total).count}</div>
+              <div className="text-xs text-muted-foreground">{describeQuantity(g, g.total).detail ?? 'total'}</div>
             </div>
           </div>
 
@@ -181,7 +184,7 @@ function SearchResults({ rows, onNavigate }: { rows: InventorySearchResult[]; on
               >
                 <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: loc.locationColor }} />
                 <span className="text-foreground truncate max-w-[10rem]">{loc.locationName}</span>
-                <span className="text-muted-foreground">×{loc.quantity}</span>
+                <span className="text-muted-foreground">×{describeQuantity(loc, loc.quantity).count}</span>
               </button>
             ))}
           </div>
