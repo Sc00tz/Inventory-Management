@@ -3,11 +3,12 @@ import { Button } from '@blinkdotnew/ui'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './dialog'
 import { Loader2, Search } from 'lucide-react'
 import { lookupBarcode } from '../lib/api'
+import { PackFields, EMPTY_PACK, packToApi, isPackValid, type PackValue } from './PackFields'
 
 interface AddProductModalProps {
   open: boolean
   barcode: string
-  onConfirm: (name: string, brand: string, barcode: string) => void
+  onConfirm: (name: string, brand: string, barcode: string, pack: { packSize: number | null; unitName: string | null }) => void
   onCancel: () => void
 }
 
@@ -16,6 +17,7 @@ export function AddProductModal({ open, barcode, onConfirm, onCancel }: AddProdu
   const [brand, setBrand] = useState('')
   const [looking, setLooking] = useState(false)
   const [looked, setLooked] = useState(false)
+  const [pack, setPack] = useState<PackValue>(EMPTY_PACK)
 
   // Prevents setState calls if the modal closes before the async lookup resolves
   const abortedRef = useRef(false)
@@ -26,6 +28,7 @@ export function AddProductModal({ open, barcode, onConfirm, onCancel }: AddProdu
     abortedRef.current = false
     setName('')
     setBrand('')
+    setPack(EMPTY_PACK)
     setLooked(false)
     setLooking(true)
 
@@ -44,8 +47,8 @@ export function AddProductModal({ open, barcode, onConfirm, onCancel }: AddProdu
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!name.trim()) return
-    onConfirm(name.trim(), brand.trim(), barcode)
+    if (!name.trim() || !isPackValid(pack)) return
+    onConfirm(name.trim(), brand.trim(), barcode, packToApi(pack))
   }
 
   return (
@@ -95,11 +98,12 @@ export function AddProductModal({ open, barcode, onConfirm, onCancel }: AddProdu
               placeholder="e.g. Kirkland"
             />
           </div>
+          <PackFields value={pack} onChange={setPack} />
           <div className="flex gap-2 mt-1">
             <Button type="button" variant="outline" className="flex-1" onClick={onCancel}>
               Cancel
             </Button>
-            <Button type="submit" className="flex-1" disabled={!name.trim() || looking}>
+            <Button type="submit" className="flex-1" disabled={!name.trim() || looking || !isPackValid(pack)}>
               Add to Inventory
             </Button>
           </div>
