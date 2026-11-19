@@ -7,8 +7,8 @@ import { ScanInput } from '../components/ScanInput'
 import { CameraScanner } from '../components/CameraScanner'
 import { getProducts, updateProduct, deleteProduct, createProduct, lookupBarcode } from '../lib/api'
 import type { Product } from '../types'
-import { PackFields, EMPTY_PACK, packFromProduct, packToApi, isPackValid, type PackValue } from '../components/PackFields'
-import { describeQuantity, isMultipack } from '../lib/quantity'
+import { SubItemFields, EMPTY_SUB_ITEM, subItemFromProduct, subItemToApi, isSubItemValid, type SubItemValue } from '../components/SubItemFields'
+import { type ProductInput } from '../lib/api'
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -35,28 +35,31 @@ export function ProductsPage() {
   })
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<Product> }) => updateProduct(id, data),
+    mutationFn: ({ id, data }: { id: string; data: Parameters<typeof updateProduct>[1] }) => updateProduct(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['products'] })
       queryClient.invalidateQueries({ queryKey: ['inventory'] })
       setEditProduct(null)
       toast.success('Product updated')
     },
+    onError: (e) => toast.error((e as Error).message),
   })
 
   const createMutation = useMutation({
-    mutationFn: (data: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>) => createProduct(data),
+    mutationFn: (data: ProductInput) => createProduct(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['products'] })
       setShowAdd(false)
       toast.success('Product added')
     },
+    onError: (e) => toast.error((e as Error).message),
   })
 
   const filtered = products.filter(
     (p) =>
       p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.barcode.includes(search) ||
+      (p.barcode ?? '').includes(search) ||
+      (p.parentName ?? '').toLowerCase().includes(search.toLowerCase()) ||
       (p.brand ?? '').toLowerCase().includes(search.toLowerCase())
   )
 
@@ -138,9 +141,16 @@ export function ProductsPage() {
                   <p className="text-sm font-medium text-foreground">{product.name}</p>
                   <div className="flex items-center gap-2 mt-0.5">
                     {product.brand && <span className="text-xs text-muted-foreground">{product.brand}</span>}
-                    <span className="text-xs font-mono text-muted-foreground/50">{product.barcode}</span>
-                    {isMultipack(product) && (
-                      <span className="text-xs text-primary/90">pack of {describeQuantity(product, product.packSize).count}</span>
+                    {product.barcode && (
+                      <span className="text-xs font-mono text-muted-foreground/50">{product.barcode}</span>
+                    )}
+                    {product.childProductId && product.packSize && (
+                      <span className="text-xs text-primary/90">
+                        contains {product.packSize} × {products.find(p => p.id === product.childProductId)?.name ?? 'sub-item'}
+                      </span>
+                    )}
+                    {product.parentName && (
+                      <span className="text-xs text-primary/90">sub-item of {product.parentName}</span>
                     )}
                   </div>
                 </div>
@@ -188,6 +198,7 @@ export function ProductsPage() {
       <ProductEditModal
         open={editProduct !== null}
         product={editProduct}
+        products={products}
         onSave={(data) => editProduct && updateMutation.mutate({ id: editProduct.id, data })}
         onClose={() => setEditProduct(null)}
       />
@@ -207,18 +218,21 @@ export function ProductsPage() {
 function ProductEditModal({
   open,
   product,
+  products,
   onSave,
   onClose,
 }: {
   open: boolean
   product: Product | null
-  onSave: (data: Partial<Product>) => void
+  products: Product[]
+  onSave: (data: Parameters<typeof updateProduct>[1]) => void
   onClose: () => void
 }) {
+  const child = product?.childProductId ? products.find(p => p.id === product.childProductId) : null
   const [name, setName] = useState(product?.name ?? '')
   const [brand, setBrand] = useState(product?.brand ?? '')
   const [imageUrl, setImageUrl] = useState(product?.imageUrl ?? '')
-  const [pack, setPack] = useState<PackValue>(packFromProduct(product))
+  const [subItem, setSubItem] = useState<SubItemValue>(subItemFromProduct(product, child))
 
   // Sync form state when a different product is opened for editing
   useEffect(() => {
@@ -226,8 +240,9 @@ function ProductEditModal({
       setName(product.name)
       setBrand(product.brand || '')
       setImageUrl(product.imageUrl || '')
-      setPack(packFromProduct(product))
+      setSubItem(subItemFromProduct(product, child))
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product, open])
 
   if (!product) return null
@@ -239,13 +254,16 @@ function ProductEditModal({
           <DialogTitle>Edit Product</DialogTitle>
         </DialogHeader>
         <div className="text-xs font-mono text-muted-foreground mb-3 bg-muted px-3 py-1.5 rounded">
-          {product.barcode}
+          {product.barcode ?? 'No barcode'}
         </div>
         <form
           onSubmit={(e) => {
             e.preventDefault()
-            if (!isPackValid(pack)) return
-            onSave({ name: name.trim(), brand: brand.trim() || null, imageUrl: imageUrl.trim() || null, ...packToApi(pack) })
+            if (!isSubItemValid(subItem)) return
+            const base = { name: name.trim(), brand: brand.trim() || null, imageUrl: imageUrl.trim() || null }
+            // Only send subItem when it's being added, changed or removed
+            const touchesSubItem = !product.parentId && (subItem.enabled || !!product.childProductId)
+            onSave(touchesSubItem ? { ...base, subItem: subItemToApi(subItem) } : base)
           }}
           className="flex flex-col gap-3"
         >
@@ -279,16 +297,26 @@ function ProductEditModal({
               className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
           </div>
-          <PackFields
-            value={pack}
-            onChange={setPack}
-            convertNote={!isMultipack(product) && pack.enabled
-              ? `Stock you already have will be converted: each package counted so far becomes ${pack.size || 'N'} ${pack.unitName.trim() || 'units'}.`
-              : null}
-          />
+          {product.parentId ? (
+            <p className="text-xs text-muted-foreground rounded-lg border border-border p-3">
+              This is a sub-item of <strong className="text-foreground">{product.parentName}</strong>. Edit how many come
+              in each box from that product.
+            </p>
+          ) : (
+            <SubItemFields
+              value={subItem}
+              onChange={setSubItem}
+              parentName={name}
+              note={!product.childProductId && subItem.enabled
+                ? `Any ${product.name} you already have in stock will be converted: each one becomes ${subItem.perParent || 'N'} ${subItem.name.trim() || 'sub-items'}.`
+                : product.childProductId && !subItem.enabled
+                  ? `${child?.name ?? 'The sub-item'} will become a normal product and keep its stock.`
+                  : null}
+            />
+          )}
           <div className="flex gap-2 mt-1">
             <Button type="button" variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
-            <Button type="submit" className="flex-1" disabled={!isPackValid(pack)}>Save</Button>
+            <Button type="submit" className="flex-1" disabled={!isSubItemValid(subItem)}>Save</Button>
           </div>
         </form>
       </DialogContent>
@@ -304,14 +332,14 @@ function ProductAddModal({
   onClose,
 }: {
   open: boolean
-  onSave: (data: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>) => void
+  onSave: (data: ProductInput) => void
   onClose: () => void
 }) {
   const [name, setName] = useState('')
   const [brand, setBrand] = useState('')
   const [barcode, setBarcode] = useState('')
   const [imageUrl, setImageUrl] = useState('')
-  const [pack, setPack] = useState<PackValue>(EMPTY_PACK)
+  const [subItem, setSubItem] = useState<SubItemValue>(EMPTY_SUB_ITEM)
   const [lookupState, setLookupState] = useState<'idle' | 'looking' | 'found' | 'notfound'>('idle')
 
   // Reset form when the modal closes
@@ -321,7 +349,7 @@ function ProductAddModal({
       setBrand('')
       setBarcode('')
       setImageUrl('')
-      setPack(EMPTY_PACK)
+      setSubItem(EMPTY_SUB_ITEM)
       setLookupState('idle')
     }
   }, [open])
@@ -349,8 +377,8 @@ function ProductAddModal({
         <form
           onSubmit={(e) => {
             e.preventDefault()
-            if (!isPackValid(pack)) return
-            onSave({ barcode: barcode.trim(), name: name.trim(), brand: brand.trim() || null, imageUrl: imageUrl || null, ...packToApi(pack) })
+            if (!isSubItemValid(subItem)) return
+            onSave({ barcode: barcode.trim(), name: name.trim(), brand: brand.trim() || null, imageUrl: imageUrl || null, subItem: subItemToApi(subItem) })
           }}
           className="flex flex-col gap-3"
         >
@@ -387,10 +415,10 @@ function ProductAddModal({
               className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
           </div>
-          <PackFields value={pack} onChange={setPack} />
+          <SubItemFields value={subItem} onChange={setSubItem} parentName={name} />
           <div className="flex gap-2 mt-1">
             <Button type="button" variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
-            <Button type="submit" className="flex-1" disabled={!barcode.trim() || !name.trim() || !isPackValid(pack)}>Add</Button>
+            <Button type="submit" className="flex-1" disabled={!barcode.trim() || !name.trim() || !isSubItemValid(subItem)}>Add</Button>
           </div>
         </form>
       </DialogContent>

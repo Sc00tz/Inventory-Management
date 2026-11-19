@@ -1,7 +1,7 @@
 import { useState, Fragment, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, useNavigate } from '@tanstack/react-router'
-import { ArrowLeft, Plus, Minus, Trash2, Edit2, ScanBarcode, Package, QrCode, Copy, Check, ChevronRight, Box, Home, Layers, Printer, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, Plus, Minus, Trash2, Edit2, ScanBarcode, Package, QrCode, Copy, Check, ChevronRight, Box, Home, Layers, Printer, AlertTriangle, CornerDownRight } from 'lucide-react'
 import { Archive, Refrigerator, Snowflake, Package2, BookOpen } from 'lucide-react'
 import { Button, toast } from '@blinkdotnew/ui'
 import { ScanInput } from '../components/ScanInput'
@@ -10,7 +10,6 @@ import { AddItemModal } from '../components/AddItemModal'
 import { LocationFormModal } from '../components/LocationFormModal'
 import { NfcWriter } from '../components/NfcWriter'
 import { useSettings, resolveBaseUrl, locationShortUrl, isLocalOnly } from '../lib/settings'
-import { describeQuantity, isMultipack, unitsPerScan } from '../lib/quantity'
 import {
   getLocation,
   getLocations,
@@ -24,7 +23,7 @@ import {
   updateLocation,
   deleteLocation,
 } from '../lib/api'
-import type { Location, LocationType, InventoryWithProduct } from '../types'
+import type { Location, LocationType, InventoryWithProduct, ParentInfo, SubItemInput } from '../types'
 
 // Map of location type → icon component
 const TYPE_ICONS: Record<string, React.FC<{ size?: number; className?: string }>> = {
@@ -177,11 +176,14 @@ export function LocationPage() {
     try {
       const existing = await getProductByBarcode(barcode)
       if (existing) {
-        // A multipack scan adds every unit in the package
-        await adjustMutation.mutateAsync({ productId: existing.id, delta: unitsPerScan(existing) })
-        toast.success(isMultipack(existing)
-          ? `+1 pack ${existing.name} (${describeQuantity(existing, existing.packSize).count})`
-          : `+1 ${existing.name}`)
+        if (existing.child && existing.packSize) {
+          // Box with a sub-item: stock lives on the sub-item, so add a box's worth
+          await adjustMutation.mutateAsync({ productId: existing.child.id, delta: existing.packSize })
+          toast.success(`+1 ${existing.name} (${existing.packSize} × ${existing.child.name})`)
+        } else {
+          await adjustMutation.mutateAsync({ productId: existing.id, delta: 1 })
+          toast.success(`+1 ${existing.name}`)
+        }
       } else {
         // Unknown barcode — prompt the user to name the new product
         setPendingScan({ barcode })
@@ -193,21 +195,21 @@ export function LocationPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location?.id])
 
-  const handleNewProduct = async (
-    name: string, brand: string, barcode: string,
-    pack: { packSize: number | null; unitName: string | null },
-  ) => {
+  const handleNewProduct = async (name: string, brand: string, barcode: string, subItem: SubItemInput | null) => {
     try {
-      const product = await createProduct({ barcode, name, brand: brand || null, imageUrl: null, ...pack })
+      const product = await createProduct({ barcode, name, brand: brand || null, imageUrl: null, subItem })
       queryClient.invalidateQueries({ queryKey: ['products'] })
       // adjustMutation.onSuccess already calls invalidateInventory — no manual invalidate needed
-      await adjustMutation.mutateAsync({ productId: product.id, delta: unitsPerScan(product) })
-      toast.success(isMultipack(product)
-        ? `+1 pack ${product.name} (${describeQuantity(product, product.packSize).count})`
-        : `+1 ${product.name}`)
+      if (product.child && product.packSize) {
+        await adjustMutation.mutateAsync({ productId: product.child.id, delta: product.packSize })
+        toast.success(`+1 ${product.name} (${product.packSize} × ${product.child.name})`)
+      } else {
+        await adjustMutation.mutateAsync({ productId: product.id, delta: 1 })
+        toast.success(`+1 ${product.name}`)
+      }
       setPendingScan(null)
-    } catch {
-      toast.error('Failed to add product')
+    } catch (e) {
+      toast.error((e as Error).message || 'Failed to add product')
     }
   }
 
@@ -376,7 +378,7 @@ export function LocationPage() {
         </div>
         <ScanInput onScan={handleScan} placeholder="Scan product barcode to add…" autoFocus closeOnScan />
         <p className="text-xs text-muted-foreground mt-2">
-          Scan adds 1 (a whole pack for multipacks). Unknown barcodes prompt for a product name. First-time items are remembered.
+          Scan adds 1 (a box with sub-items adds all of them). Unknown barcodes prompt for a product name. First-time items are remembered.
         </p>
       </div>
 
@@ -403,13 +405,26 @@ export function LocationPage() {
           </div>
           <div className="divide-y divide-border">
             {inventory.map((item) => (
-              <InventoryRow
-                key={item.id}
-                item={item}
-                onAdjust={(delta) => adjustMutation.mutate({ productId: item.productId, delta })}
-                onSetQty={(qty) => setQtyMutation.mutate({ entryId: item.id, qty })}
-                onRemove={() => removeMutation.mutate(item.id)}
-              />
+              <Fragment key={item.id}>
+                {/* Sub-items show under their box; the box count follows the sub-item count */}
+                {item.parent && (
+                  <BoxRow
+                    parent={item.parent}
+                    quantity={Number(item.quantity)}
+                    onAddBox={() => {
+                      adjustMutation.mutate({ productId: item.productId, delta: item.parent!.perParent })
+                      toast.success(`+1 ${item.parent!.name} (${item.parent!.perParent} × ${item.product.name})`)
+                    }}
+                  />
+                )}
+                <InventoryRow
+                  item={item}
+                  nested={!!item.parent}
+                  onAdjust={(delta) => adjustMutation.mutate({ productId: item.productId, delta })}
+                  onSetQty={(qty) => setQtyMutation.mutate({ entryId: item.id, qty })}
+                  onRemove={() => removeMutation.mutate(item.id)}
+                />
+              </Fragment>
             ))}
           </div>
         </div>
@@ -439,9 +454,9 @@ export function LocationPage() {
       <AddItemModal
         open={showAddItem}
         products={allProducts}
-        onAdd={(product, quantity) => {
-          adjustMutation.mutate({ productId: product.id, delta: quantity })
-          toast.success(`+${quantity} ${product.name}`)
+        onAdd={(productId, quantity, label) => {
+          adjustMutation.mutate({ productId, delta: quantity })
+          toast.success(label)
         }}
         onClose={() => setShowAddItem(false)}
       />
@@ -477,12 +492,14 @@ export function LocationPage() {
 
 interface InventoryRowProps {
   item: InventoryWithProduct
+  /** Sub-item shown under its box row */
+  nested?: boolean
   onAdjust: (delta: number) => void
   onSetQty: (qty: number) => void
   onRemove: () => void
 }
 
-function InventoryRow({ item, onAdjust, onSetQty, onRemove }: InventoryRowProps) {
+function InventoryRow({ item, nested, onAdjust, onSetQty, onRemove }: InventoryRowProps) {
   const [editing, setEditing] = useState(false)
   const [editVal, setEditVal] = useState(String(item.quantity))
 
@@ -503,11 +520,10 @@ function InventoryRow({ item, onAdjust, onSetQty, onRemove }: InventoryRowProps)
     Number(item.quantity) % 1 === 0 ? Math.floor(Number(item.quantity)) : item.quantity,
     [item.quantity]
   )
-  // Multipacks: quantity is in units; show e.g. "36 sleeves · 2 packs"
-  const qtyInfo = describeQuantity(item.product, Number(item.quantity))
 
   return (
-    <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors group">
+    <div className={`flex items-center gap-3 py-3 pr-4 hover:bg-muted/30 transition-colors group ${nested ? 'pl-10 border-t-0' : 'pl-4'}`}>
+      {nested && <CornerDownRight size={14} className="text-muted-foreground/50 shrink-0 -ml-5" />}
       {item.product.imageUrl && (
         <img
           src={item.product.imageUrl}
@@ -521,11 +537,10 @@ function InventoryRow({ item, onAdjust, onSetQty, onRemove }: InventoryRowProps)
           {item.product.brand && (
             <span className="text-xs text-muted-foreground">{item.product.brand}</span>
           )}
-          <span className="text-xs font-mono text-muted-foreground/50">{item.product.barcode}</span>
+          {item.product.barcode && (
+            <span className="text-xs font-mono text-muted-foreground/50">{item.product.barcode}</span>
+          )}
         </div>
-        {qtyInfo.detail && (
-          <p className="text-xs text-primary/90 mt-0.5">{qtyInfo.count} · {qtyInfo.detail}</p>
-        )}
       </div>
 
       {/* Quantity controls */}
@@ -568,6 +583,43 @@ function InventoryRow({ item, onAdjust, onSetQty, onRemove }: InventoryRowProps)
         >
           <Trash2 size={13} />
         </button>
+      </div>
+    </div>
+  )
+}
+
+// ── Box row ───────────────────────────────────────────────────────────────────
+// The package a sub-item comes in (e.g. Ritz box above its sleeves). Its count
+// isn't stored: it's however many boxes the remaining sub-items take up, so it
+// drops by one each time a full box's worth has been used.
+
+function BoxRow({ parent, quantity, onAddBox }: { parent: ParentInfo; quantity: number; onAddBox: () => void }) {
+  const boxes = Math.ceil(quantity / parent.perParent)
+  return (
+    <div className="flex items-center gap-3 px-4 py-3 bg-muted/20">
+      {parent.imageUrl && (
+        <img src={parent.imageUrl} alt={parent.name} className="w-10 h-10 rounded-md object-cover shrink-0 bg-muted" />
+      )}
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-foreground truncate">{parent.name}</p>
+        <div className="flex items-center gap-2 mt-0.5">
+          {parent.brand && <span className="text-xs text-muted-foreground">{parent.brand}</span>}
+          <span className="text-xs text-muted-foreground/70">{parent.perParent} per box</span>
+        </div>
+      </div>
+      <div className="flex items-center gap-1.5 shrink-0">
+        <span className="w-7" />
+        <span className="w-10 text-center text-sm font-mono text-foreground" title="Boxes left — follows the count below">
+          {boxes}
+        </span>
+        <button
+          onClick={onAddBox}
+          title={`Add a ${parent.name}`}
+          className="w-7 h-7 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-primary/60 transition-colors"
+        >
+          <Plus size={13} />
+        </button>
+        <span className="w-7 ml-1" />
       </div>
     </div>
   )

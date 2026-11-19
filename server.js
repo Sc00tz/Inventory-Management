@@ -39,13 +39,16 @@ db.exec(`
   );
 
   CREATE TABLE IF NOT EXISTS products (
-    id        TEXT PRIMARY KEY,
-    barcode   TEXT NOT NULL UNIQUE,
-    name      TEXT NOT NULL,
-    brand     TEXT,
-    imageUrl  TEXT,
-    createdAt TEXT NOT NULL,
-    updatedAt TEXT NOT NULL
+    id             TEXT PRIMARY KEY,
+    barcode        TEXT UNIQUE,
+    name           TEXT NOT NULL,
+    brand          TEXT,
+    imageUrl       TEXT,
+    createdAt      TEXT NOT NULL,
+    updatedAt      TEXT NOT NULL,
+    packSize       INTEGER,
+    unitName       TEXT,
+    childProductId TEXT
   );
 
   CREATE TABLE IF NOT EXISTS inventory (
@@ -71,13 +74,34 @@ db.exec(`
 `)
 
 // ── Migrations ────────────────────────────────────────────────────────────────
-// Multipacks: a product can contain N smaller units (e.g. a box of 18 sleeves).
-// When packSize is set, inventory quantities for that product are counted in
-// units (sleeves), not packages.
+// Sub-items: a product (e.g. a box of Ritz) can contain N of another product
+// (e.g. "Ritz sleeve"). The box stores childProductId + packSize (sleeves per
+// box). Stock is kept on the sleeve; the box count is derived from it.
+// unitName is left over from the earlier multipack version (see below).
 {
-  const cols = db.prepare('PRAGMA table_info(products)').all().map(c => c.name)
-  if (!cols.includes('packSize')) db.exec('ALTER TABLE products ADD COLUMN packSize INTEGER')
-  if (!cols.includes('unitName')) db.exec('ALTER TABLE products ADD COLUMN unitName TEXT')
+  const cols = db.prepare('PRAGMA table_info(products)').all()
+  const has = (n) => cols.some(c => c.name === n)
+  if (!has('packSize')) db.exec('ALTER TABLE products ADD COLUMN packSize INTEGER')
+  if (!has('unitName')) db.exec('ALTER TABLE products ADD COLUMN unitName TEXT')
+  if (!has('childProductId')) db.exec('ALTER TABLE products ADD COLUMN childProductId TEXT')
+
+  // Sub-items may not have their own barcode: rebuild the table so barcode is
+  // optional (SQLite can't drop NOT NULL in place). UNIQUE still applies to
+  // non-empty barcodes; SQLite allows any number of NULLs.
+  if (cols.find(c => c.name === 'barcode')?.notnull) {
+    db.exec(`
+      BEGIN;
+      CREATE TABLE products_new (
+        id TEXT PRIMARY KEY, barcode TEXT UNIQUE, name TEXT NOT NULL, brand TEXT, imageUrl TEXT,
+        createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, packSize INTEGER, unitName TEXT, childProductId TEXT
+      );
+      INSERT INTO products_new (id, barcode, name, brand, imageUrl, createdAt, updatedAt, packSize, unitName, childProductId)
+        SELECT id, barcode, name, brand, imageUrl, createdAt, updatedAt, packSize, unitName, childProductId FROM products;
+      DROP TABLE products;
+      ALTER TABLE products_new RENAME TO products;
+      COMMIT;
+    `)
+  }
 }
 
 // node:sqlite has no better-sqlite3-style db.transaction(). This shim wraps a
@@ -102,6 +126,27 @@ db.transaction = (fn) => (...args) => {
   }
 }
 
+// Earlier "multipack" products (packSize set, no sub-item) counted their stock
+// in units on the box itself. Turn each into box + sub-item and move the unit
+// stock onto the sub-item, so nothing is lost.
+const convertOldMultipacks = db.transaction(() => {
+  const rows = db.prepare('SELECT * FROM products WHERE packSize > 1 AND childProductId IS NULL').all()
+  for (const p of rows) {
+    const childId = randomUUID()
+    const now = new Date().toISOString()
+    const unit = p.unitName?.trim() || 'single'
+    db.prepare(`
+      INSERT INTO products (id, barcode, name, brand, imageUrl, createdAt, updatedAt)
+      VALUES (?, NULL, ?, ?, NULL, ?, ?)
+    `).run(childId, `${p.name} (${unit})`, p.brand, now, now)
+    db.prepare('UPDATE products SET childProductId = ?, updatedAt = ? WHERE id = ?').run(childId, now, p.id)
+    db.prepare('UPDATE inventory SET productId = ?, updatedAt = ? WHERE productId = ?').run(childId, now, p.id)
+  }
+  return rows.length
+})
+const converted = convertOldMultipacks()
+if (converted) console.log(`Converted ${converted} multipack product(s) to box + sub-item`)
+
 // ── Validation helpers ────────────────────────────────────────────────────────
 
 function requireStrings(res, obj, fields) {
@@ -114,18 +159,18 @@ function requireStrings(res, obj, fields) {
   return true
 }
 
-// packSize: whole number 2–10000, or null for a single item. unitName: short label.
-function parsePackFields(body) {
-  let packSize = body.packSize
-  if (packSize === '' || packSize === undefined || packSize === null || Number(packSize) <= 1) packSize = null
-  else {
-    packSize = Number(packSize)
-    if (!Number.isInteger(packSize) || packSize > 10000) return { error: 'packSize must be a whole number between 2 and 10000' }
+// Validates a sub-item definition: { name, barcode?, perParent }.
+// Returns null when none was given, { error } when invalid.
+function parseSubItem(v) {
+  if (v === null || v === undefined) return null
+  if (typeof v !== 'object') return { error: 'subItem must be an object or null' }
+  const name = typeof v.name === 'string' ? v.name.trim().slice(0, 200) : ''
+  const barcode = typeof v.barcode === 'string' && v.barcode.trim() ? v.barcode.trim().slice(0, 64) : null
+  const perParent = Number(v.perParent)
+  if (!Number.isInteger(perParent) || perParent < 1 || perParent > 10000) {
+    return { error: 'perParent must be a whole number between 1 and 10000' }
   }
-  const unitName = packSize && typeof body.unitName === 'string' && body.unitName.trim()
-    ? body.unitName.trim().slice(0, 40)
-    : null
-  return { packSize, unitName }
+  return { name, barcode, perParent }
 }
 
 // ── QR code ───────────────────────────────────────────────────────────────────
@@ -331,80 +376,160 @@ app.delete('/api/locations/:id', (req, res) => {
   }
 })
 
+const getProduct = (id) => db.prepare('SELECT * FROM products WHERE id = ?').get(id)
+const withChild = (p) => p && { ...p, child: p.childProductId ? getProduct(p.childProductId) ?? null : null }
+
 // ── Products ──────────────────────────────────────────────────────────────────
 
+// Each product includes parentId/parentName when it is some product's sub-item
 app.get('/api/products', (req, res) => {
-  res.json(db.prepare('SELECT * FROM products ORDER BY name ASC').all())
+  res.json(db.prepare(`
+    SELECT p.*, pp.id AS parentId, pp.name AS parentName
+    FROM products p
+    LEFT JOIN products pp ON pp.childProductId = p.id
+    ORDER BY p.name COLLATE NOCASE ASC
+  `).all())
 })
 
+// Includes `child` (the sub-item product) so a box scan knows what it adds
 app.get('/api/products/barcode/:barcode', (req, res) => {
   const row = db.prepare('SELECT * FROM products WHERE barcode = ?').get(req.params.barcode)
   if (!row) return res.status(404).json({ error: 'Not found' })
-  res.json(row)
+  res.json(withChild(row))
 })
 
+
+class ApiError extends Error { constructor(status, message) { super(message); this.status = status } }
+
+// Links (or creates) the sub-item for a product. An existing product is reused
+// when the sub-item's barcode matches one, or (without a barcode) when a
+// stand-alone product already has exactly that name.
+function attachSubItem(parent, sub) {
+  const now = new Date().toISOString()
+  let child = sub.barcode ? db.prepare('SELECT * FROM products WHERE barcode = ?').get(sub.barcode) : null
+  if (!child && sub.name) {
+    child = db.prepare(`
+      SELECT * FROM products
+      WHERE name = ? COLLATE NOCASE AND id != ? AND childProductId IS NULL
+        AND id NOT IN (SELECT childProductId FROM products WHERE childProductId IS NOT NULL)
+      ORDER BY createdAt LIMIT 1
+    `).get(sub.name, parent.id) ?? null
+  }
+  if (child) {
+    if (child.id === parent.id) throw new ApiError(400, 'A product cannot contain itself')
+    if (child.childProductId) throw new ApiError(400, `${child.name} has its own sub-item, so it can't also be one`)
+    const owner = db.prepare('SELECT name FROM products WHERE childProductId = ? AND id != ?').get(child.id, parent.id)
+    if (owner) throw new ApiError(409, `${child.name} is already the sub-item of ${owner.name}`)
+  } else {
+    if (!sub.name) throw new ApiError(400, 'Sub-item name is required')
+    const id = randomUUID()
+    db.prepare(`
+      INSERT INTO products (id, barcode, name, brand, imageUrl, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, NULL, ?, ?)
+    `).run(id, sub.barcode, sub.name, parent.brand, now, now)
+    child = getProduct(id)
+  }
+  db.prepare('UPDATE products SET childProductId = ?, packSize = ?, updatedAt = ? WHERE id = ?')
+    .run(child.id, sub.perParent, now, parent.id)
+
+  // Existing stock of the box becomes sub-item stock: 2 boxes -> 36 sleeves
+  const boxRows = db.prepare('SELECT * FROM inventory WHERE productId = ?').all(parent.id)
+  for (const row of boxRows) {
+    const qty = row.quantity * sub.perParent
+    const existing = db.prepare('SELECT id FROM inventory WHERE locationId = ? AND productId = ?').get(row.locationId, child.id)
+    if (existing) db.prepare('UPDATE inventory SET quantity = quantity + ?, updatedAt = ? WHERE id = ?').run(qty, now, existing.id)
+    else db.prepare('INSERT INTO inventory (id, locationId, productId, quantity, addedAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(randomUUID(), row.locationId, child.id, qty, now, now)
+    db.prepare('DELETE FROM inventory WHERE id = ?').run(row.id)
+  }
+}
+
+// Turns SQLite's barcode uniqueness error into a readable 409
+function sendError(res, e) {
+  if (e instanceof ApiError) return res.status(e.status).json({ error: e.message })
+  if (/UNIQUE constraint failed: products\.barcode/.test(e.message)) {
+    return res.status(409).json({ error: 'That barcode already belongs to another product' })
+  }
+  res.status(500).json({ error: e.message })
+}
+
+const createProductTx = db.transaction((body, sub) => {
+  const id = randomUUID()
+  const now = new Date().toISOString()
+  db.prepare(`
+    INSERT INTO products (id, barcode, name, brand, imageUrl, createdAt, updatedAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(id, body.barcode.trim(), body.name, body.brand || null, body.imageUrl || null, now, now)
+  if (sub) attachSubItem(getProduct(id), sub)
+  return withChild(getProduct(id))
+})
+
+// POST /api/products { barcode, name, brand?, imageUrl?, subItem?: { name, barcode?, perParent } }
 app.post('/api/products', (req, res) => {
   if (!requireStrings(res, req.body, ['barcode', 'name'])) return
+  const sub = parseSubItem(req.body.subItem)
+  if (sub?.error) return res.status(400).json({ error: sub.error })
   try {
-    const { barcode, name, brand, imageUrl } = req.body
-    const pack = parsePackFields(req.body)
-    if (pack.error) return res.status(400).json({ error: pack.error })
-    const id = randomUUID()
-    const now = new Date().toISOString()
-
-    db.prepare(`
-      INSERT INTO products (id, barcode, name, brand, imageUrl, packSize, unitName, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, barcode, name, brand || null, imageUrl || null, pack.packSize, pack.unitName, now, now)
-
-    res.json(db.prepare('SELECT * FROM products WHERE id = ?').get(id))
+    res.json(createProductTx(req.body, sub))
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    sendError(res, e)
   }
 })
 
-// Updates a product. Pack fields are only touched when packSize is in the body.
-// Turning a single item into a multipack converts existing stock: counts were
-// whole packages, so 2 boxes becomes 2 × 18 = 36 sleeves. Changing an existing
-// pack size or removing it keeps unit counts as they are.
-const updateProductTx = db.transaction((id, body, pack) => {
+// Updates a product. Sub-item handling only happens when `subItem` is in the body:
+//   null            → unlink the sub-item (it stays as a normal product with its stock)
+//   { ... } (none)  → add a sub-item, converting existing box stock into sub-item stock
+//   { ... } (has)   → rename / re-barcode the sub-item and update the per-box count
+const updateProductTx = db.transaction((id, body, hasSub, sub) => {
   const now = new Date().toISOString()
-  const before = db.prepare('SELECT * FROM products WHERE id = ?').get(id)
-  const packSize = pack ? pack.packSize : before.packSize
-  const unitName = pack ? pack.unitName : before.unitName
-
-  db.prepare(`
-    UPDATE products
-    SET name=?, brand=?, imageUrl=?, packSize=?, unitName=?, updatedAt=?
-    WHERE id=?
-  `).run(body.name, body.brand || null, body.imageUrl || null, packSize, unitName, now, id)
-
-  if (!before.packSize && packSize) {
-    db.prepare('UPDATE inventory SET quantity = quantity * ?, updatedAt = ? WHERE productId = ?').run(packSize, now, id)
+  db.prepare('UPDATE products SET name=?, brand=?, imageUrl=?, updatedAt=? WHERE id=?')
+    .run(body.name, body.brand || null, body.imageUrl || null, now, id)
+  if (hasSub) {
+    const p = getProduct(id)
+    if (!sub) {
+      db.prepare('UPDATE products SET childProductId = NULL, packSize = NULL, updatedAt = ? WHERE id = ?').run(now, id)
+    } else if (!p.childProductId) {
+      if (db.prepare('SELECT 1 FROM products WHERE childProductId = ?').get(id)) {
+        throw new ApiError(400, `${p.name} is itself a sub-item, so it can't have one`)
+      }
+      attachSubItem(p, sub)
+    } else {
+      if (sub.name) {
+        db.prepare('UPDATE products SET name = ?, barcode = ?, updatedAt = ? WHERE id = ?')
+          .run(sub.name, sub.barcode, now, p.childProductId)
+      }
+      db.prepare('UPDATE products SET packSize = ?, updatedAt = ? WHERE id = ?').run(sub.perParent, now, id)
+    }
   }
-  return db.prepare('SELECT * FROM products WHERE id = ?').get(id)
+  return withChild(getProduct(id))
 })
 
 app.put('/api/products/:id', (req, res) => {
   if (!requireStrings(res, req.body, ['name'])) return
+  if (!getProduct(req.params.id)) return res.status(404).json({ error: 'Not found' })
+  const hasSub = 'subItem' in req.body
+  const sub = parseSubItem(req.body.subItem)
+  if (sub?.error) return res.status(400).json({ error: sub.error })
   try {
-    const existing = db.prepare('SELECT id FROM products WHERE id = ?').get(req.params.id)
-    if (!existing) return res.status(404).json({ error: 'Not found' })
-
-    let pack = null
-    if ('packSize' in req.body) {
-      pack = parsePackFields(req.body)
-      if (pack.error) return res.status(400).json({ error: pack.error })
-    }
-    res.json(updateProductTx(req.params.id, req.body, pack))
+    res.json(updateProductTx(req.params.id, req.body, hasSub, sub))
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    sendError(res, e)
   }
 })
 
+// Deleting a sub-item unlinks it from its box first
+const deleteProductTx = db.transaction((id) => {
+  db.prepare('UPDATE products SET childProductId = NULL, packSize = NULL WHERE childProductId = ?').run(id)
+  db.prepare('DELETE FROM products WHERE id = ?').run(id)
+})
+
 app.delete('/api/products/:id', (req, res) => {
-  db.prepare('DELETE FROM products WHERE id = ?').run(req.params.id)
-  res.json({ ok: true })
+  try {
+    deleteProductTx(req.params.id)
+    res.json({ ok: true })
+  } catch (e) {
+    sendError(res, e)
+  }
 })
 
 // ── Inventory counts ──────────────────────────────────────────────────────────
@@ -441,16 +566,19 @@ app.get('/api/inventory/search', (req, res) => {
         p.name       AS name,
         p.brand      AS brand,
         p.imageUrl   AS imageUrl,
-        p.packSize   AS packSize,
-        p.unitName   AS unitName
+        pp.name      AS parentName,
+        pp.packSize  AS parentPackSize
       FROM inventory i
       JOIN products p  ON i.productId  = p.id
       JOIN locations l ON i.locationId = l.id
+      LEFT JOIN products pp ON pp.childProductId = p.id
       WHERE p.name LIKE ? ESCAPE '\\'
          OR p.brand LIKE ? ESCAPE '\\'
          OR p.barcode LIKE ? ESCAPE '\\'
+         OR pp.name LIKE ? ESCAPE '\\'
+         OR pp.barcode LIKE ? ESCAPE '\\'
       ORDER BY p.name COLLATE NOCASE ASC, l.name COLLATE NOCASE ASC
-    `).all(like, like, like)
+    `).all(like, like, like, like, like)
 
     res.json(rows)
   } catch (e) {
@@ -467,12 +595,17 @@ app.get('/api/inventory/:locationId', (req, res) => {
         p.name      AS p_name,
         p.brand     AS p_brand,
         p.imageUrl  AS p_imageUrl,
-        p.packSize  AS p_packSize,
-        p.unitName  AS p_unitName,
         p.createdAt AS p_createdAt,
-        p.updatedAt AS p_updatedAt
+        p.updatedAt AS p_updatedAt,
+        pp.id       AS pp_id,
+        pp.barcode  AS pp_barcode,
+        pp.name     AS pp_name,
+        pp.brand    AS pp_brand,
+        pp.imageUrl AS pp_imageUrl,
+        pp.packSize AS pp_packSize
       FROM inventory i
       JOIN products p ON i.productId = p.id
+      LEFT JOIN products pp ON pp.childProductId = p.id
       WHERE i.locationId = ?
       ORDER BY i.updatedAt DESC
     `).all(req.params.locationId)
@@ -491,11 +624,18 @@ app.get('/api/inventory/:locationId', (req, res) => {
         name:      r.p_name,
         brand:     r.p_brand,
         imageUrl:  r.p_imageUrl,
-        packSize:  r.p_packSize,
-        unitName:  r.p_unitName,
         createdAt: r.p_createdAt,
         updatedAt: r.p_updatedAt,
       },
+      // The box this item comes in, if it's a sub-item (e.g. sleeve → Ritz box)
+      parent: r.pp_id ? {
+        id:       r.pp_id,
+        barcode:  r.pp_barcode,
+        name:     r.pp_name,
+        brand:    r.pp_brand,
+        imageUrl: r.pp_imageUrl,
+        perParent: r.pp_packSize,
+      } : null,
     })))
   } catch (e) {
     res.status(500).json({ error: e.message })
