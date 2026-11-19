@@ -3,12 +3,12 @@ import { Button } from '@blinkdotnew/ui'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './dialog'
 import { Search, Package } from 'lucide-react'
 import type { Product } from '../types'
-import { isMultipack, unitLabel } from '../lib/quantity'
 
 interface AddItemModalProps {
   open: boolean
   products: Product[]
-  onAdd: (product: Product, quantity: number) => void
+  /** productId to add to (a box adds to its sub-item), quantity, and a toast label */
+  onAdd: (productId: string, quantity: number, label: string) => void
   onClose: () => void
 }
 
@@ -16,8 +16,6 @@ export function AddItemModal({ open, products, onAdd, onClose }: AddItemModalPro
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Product | null>(null)
   const [quantity, setQuantity] = useState('1')
-  // For multipacks: is the typed quantity whole packs or single units?
-  const [inPacks, setInPacks] = useState(true)
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
@@ -26,7 +24,7 @@ export function AddItemModal({ open, products, onAdd, onClose }: AddItemModalPro
       p =>
         p.name.toLowerCase().includes(q) ||
         (p.brand ?? '').toLowerCase().includes(q) ||
-        p.barcode.includes(q)
+        (p.barcode ?? '').includes(q)
     )
   }, [products, search])
 
@@ -34,7 +32,6 @@ export function AddItemModal({ open, products, onAdd, onClose }: AddItemModalPro
     setSearch('')
     setSelected(null)
     setQuantity('1')
-    setInPacks(true)
     onClose()
   }
 
@@ -42,8 +39,14 @@ export function AddItemModal({ open, products, onAdd, onClose }: AddItemModalPro
     if (!selected) return
     const qty = parseFloat(quantity)
     if (isNaN(qty) || qty <= 0) return
-    // Inventory for multipacks is stored in units
-    onAdd(selected, isMultipack(selected) && inPacks ? qty * selected.packSize : qty)
+    // A box with a sub-item stores its stock on the sub-item: 2 boxes → 36 sleeves
+    const child = selected.childProductId ? products.find(p => p.id === selected.childProductId) : null
+    if (child && selected.packSize) {
+      const units = qty * selected.packSize
+      onAdd(child.id, units, `+${qty} ${selected.name} (${units} × ${child.name})`)
+    } else {
+      onAdd(selected.id, qty, `+${qty} ${selected.name}`)
+    }
     handleClose()
   }
 
@@ -92,7 +95,7 @@ export function AddItemModal({ open, products, onAdd, onClose }: AddItemModalPro
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-foreground truncate">{p.name}</p>
                       <p className="text-xs text-muted-foreground truncate">
-                        {p.brand ? `${p.brand} · ` : ''}{p.barcode}
+                        {[p.brand, p.barcode, p.parentName && `inside ${p.parentName}`].filter(Boolean).join(' · ')}
                       </p>
                     </div>
                   </button>
@@ -137,19 +140,11 @@ export function AddItemModal({ open, products, onAdd, onClose }: AddItemModalPro
                 onKeyDown={e => e.key === 'Enter' && handleConfirm()}
                 className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
               />
-              {isMultipack(selected) && (
-                <div className="flex gap-1 mt-2 text-xs">
-                  {[true, false].map(packs => (
-                    <button
-                      key={String(packs)}
-                      type="button"
-                      onClick={() => setInPacks(packs)}
-                      className={`flex-1 rounded-md border px-2 py-1.5 transition-colors ${inPacks === packs ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground hover:text-foreground'}`}
-                    >
-                      {packs ? `Packs (${selected.packSize} each)` : `Single ${unitLabel(selected, 2)}`}
-                    </button>
-                  ))}
-                </div>
+              {selected.childProductId && selected.packSize && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Number of boxes. Each adds {selected.packSize} ×{' '}
+                  {products.find(p => p.id === selected.childProductId)?.name ?? 'sub-item'}.
+                </p>
               )}
             </div>
 

@@ -1,4 +1,4 @@
-import type { Location, Product, InventoryItem, InventoryWithProduct, InventorySearchResult, Settings, LabelTemplate } from '../types'
+import type { Location, Product, InventoryItem, InventoryWithProduct, InventorySearchResult, Settings, LabelTemplate, SubItemInput } from '../types'
 
 const BASE = '/api'
 
@@ -54,12 +54,37 @@ export function getProductByBarcode(barcode: string): Promise<Product | null> {
   return req<Product>('GET', `/products/barcode/${encodeURIComponent(barcode)}`).catch(() => null)
 }
 
-export function createProduct(data: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>): Promise<Product> {
-  return req('POST', '/products', data)
+export interface ProductInput {
+  barcode: string
+  name: string
+  brand: string | null
+  imageUrl: string | null
+  /** Optional sub-item, e.g. { name: 'Ritz sleeve', perParent: 18 } */
+  subItem?: SubItemInput | null
 }
 
-export function updateProduct(id: string, data: Partial<Product>): Promise<Product> {
-  return req('PUT', `/products/${id}`, data)
+// POST/PUT that surfaces the server's error message (e.g. duplicate barcode)
+async function send<T>(method: string, path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const json = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(json.error || `${method} ${path} → ${res.status}`)
+  return json
+}
+
+export function createProduct(data: ProductInput): Promise<Product> {
+  return send('POST', '/products', data)
+}
+
+/** Pass `subItem` to add/change/remove (null) the sub-item; omit it to leave it alone. */
+export function updateProduct(
+  id: string,
+  data: { name: string; brand: string | null; imageUrl: string | null; subItem?: SubItemInput | null },
+): Promise<Product> {
+  return send('PUT', `/products/${id}`, data)
 }
 
 export function deleteProduct(id: string): Promise<void> {

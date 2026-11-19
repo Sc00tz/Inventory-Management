@@ -19,14 +19,20 @@ export interface Location {
 
 export interface Product {
   id: string
-  barcode: string
+  /** Sub-items (e.g. a single sleeve) may have no barcode of their own */
+  barcode: string | null
   name: string
   brand: string | null
   imageUrl: string | null
-  /** Units inside one package (e.g. 18 sleeves in a box). null = single item. */
+  /** Sub-item this product contains (e.g. box → sleeve) */
+  childProductId?: string | null
+  /** How many of the sub-item one of these contains (e.g. 18) */
   packSize?: number | null
-  /** What one unit is called, e.g. "sleeve". Only used when packSize is set. */
-  unitName?: string | null
+  /** The sub-item product; included by the barcode lookup and create/update */
+  child?: Product | null
+  /** Set when this product is another product's sub-item (from GET /products) */
+  parentId?: string | null
+  parentName?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -41,9 +47,29 @@ export interface InventoryItem {
   updatedAt: string
 }
 
+/** The box a sub-item comes in, as joined onto inventory rows. */
+export interface ParentInfo {
+  id: string
+  barcode: string | null
+  name: string
+  brand: string | null
+  imageUrl: string | null
+  /** Sub-items per box */
+  perParent: number
+}
+
 /** InventoryItem with its product data joined in (not stored — fetched on read). */
 export interface InventoryWithProduct extends InventoryItem {
   product: Product
+  /** Set when the product is a sub-item; the box count is derived from quantity */
+  parent: ParentInfo | null
+}
+
+/** Sub-item definition sent when creating/updating a product. */
+export interface SubItemInput {
+  name: string
+  barcode?: string | null
+  perParent: number
 }
 
 /** One (product, location) match from the full-inventory search endpoint. */
@@ -55,12 +81,13 @@ export interface InventorySearchResult {
   locationColor: string
   locationType: LocationType
   productId: string
-  barcode: string
+  barcode: string | null
   name: string
   brand: string | null
   imageUrl: string | null
-  packSize: number | null
-  unitName: string | null
+  /** Box this item comes in, if it's a sub-item */
+  parentName: string | null
+  parentPackSize: number | null
 }
 
 /** App-wide settings stored server-side. */
