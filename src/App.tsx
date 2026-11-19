@@ -7,10 +7,12 @@ import {
   Link,
 } from '@tanstack/react-router'
 import { AppShell, AppShellSidebar, AppShellMain, MobileSidebarTrigger, SidebarItem } from '@blinkdotnew/ui'
-import { Archive, Package, ScanBarcode } from 'lucide-react'
+import { Archive, Package, ScanBarcode, Printer, Settings } from 'lucide-react'
 import { HomePage } from './pages/HomePage'
 import { LocationPage } from './pages/LocationPage'
 import { ProductsPage } from './pages/ProductsPage'
+import { LabelsPage } from './pages/LabelsPage'
+import { SettingsPage } from './pages/SettingsPage'
 
 // ── Root layout ───────────────────────────────────────────────────────────────
 
@@ -40,6 +42,16 @@ function RootLayout() {
               icon={<Package size={16} />}
               label="Products"
               href="/products"
+            />
+            <SidebarItem
+              icon={<Printer size={16} />}
+              label="Labels"
+              href="/labels"
+            />
+            <SidebarItem
+              icon={<Settings size={16} />}
+              label="Settings"
+              href="/settings"
             />
           </div>
 
@@ -89,7 +101,22 @@ const productsRoute = createRoute({
   component: ProductsPage,
 })
 
-const routeTree = rootRoute.addChildren([indexRoute, locationRoute, productsRoute])
+const labelsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/labels',
+  // ?ids=a,b,c preselects locations (used by "Print label" on a location page)
+  validateSearch: (search: Record<string, unknown>): { ids?: string } =>
+    typeof search.ids === 'string' && search.ids ? { ids: search.ids } : {},
+  component: LabelsPage,
+})
+
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/settings',
+  component: SettingsPage,
+})
+
+const routeTree = rootRoute.addChildren([indexRoute, locationRoute, productsRoute, labelsRoute, settingsRoute])
 
 const router = createRouter({ routeTree })
 

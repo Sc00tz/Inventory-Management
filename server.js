@@ -1,5 +1,6 @@
 import express from 'express'
 import QRCode from 'qrcode'
+import PDFDocument from 'pdfkit'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
@@ -62,6 +63,11 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_inventory_productId  ON inventory(productId);
   CREATE INDEX IF NOT EXISTS idx_locations_parentId   ON locations(parentId);
   CREATE INDEX IF NOT EXISTS idx_locations_barcode    ON locations(barcode);
+
+  CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `)
 
 // node:sqlite has no better-sqlite3-style db.transaction(). This shim wraps a
@@ -511,6 +517,278 @@ app.put('/api/inventory/:id/quantity', (req, res) => {
 app.delete('/api/inventory/:id', (req, res) => {
   db.prepare('DELETE FROM inventory WHERE id = ?').run(req.params.id)
   res.json({ ok: true })
+})
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+// Small key/value store. publicBaseUrl is the address phones use to reach this
+// server (e.g. http://192.168.1.20:4000) — it's baked into QR codes and NFC tags,
+// so it must not be "localhost". Label offsets nudge the printed layout to
+// compensate for printer drift, in millimetres.
+
+const SETTING_DEFAULTS = {
+  publicBaseUrl: process.env.PUBLIC_BASE_URL || '',
+  labelOffsetXmm: 0,
+  labelOffsetYmm: 0,
+}
+
+function getSettings() {
+  const out = { ...SETTING_DEFAULTS }
+  for (const { key, value } of db.prepare('SELECT key, value FROM settings').all()) {
+    if (key in out) {
+      try { out[key] = JSON.parse(value) } catch { /* ignore corrupt value */ }
+    }
+  }
+  return out
+}
+
+app.get('/api/settings', (req, res) => {
+  res.json(getSettings())
+})
+
+app.put('/api/settings', (req, res) => {
+  const body = req.body || {}
+  const updates = {}
+
+  if ('publicBaseUrl' in body) {
+    const url = String(body.publicBaseUrl ?? '').trim().replace(/\/+$/, '')
+    if (url && !/^https?:\/\/[^\s/]+$/i.test(url)) {
+      return res.status(400).json({ error: 'publicBaseUrl must look like http://host:port (no path)' })
+    }
+    updates.publicBaseUrl = url
+  }
+  for (const key of ['labelOffsetXmm', 'labelOffsetYmm']) {
+    if (key in body) {
+      const n = Number(body[key])
+      if (!Number.isFinite(n) || Math.abs(n) > 20) {
+        return res.status(400).json({ error: `${key} must be a number between -20 and 20` })
+      }
+      updates[key] = n
+    }
+  }
+
+  const stmt = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+  for (const [key, value] of Object.entries(updates)) stmt.run(key, JSON.stringify(value))
+  res.json(getSettings())
+})
+
+// Base URL used for QR codes / NFC: saved setting → client-supplied → request host
+function resolveBaseUrl(req, clientBase) {
+  const { publicBaseUrl } = getSettings()
+  if (publicBaseUrl) return publicBaseUrl
+  if (typeof clientBase === 'string' && /^https?:\/\/[^\s/]+$/i.test(clientBase)) return clientBase
+  return `${req.protocol}://${req.get('host')}`
+}
+
+// ── Label printing (PDF) ──────────────────────────────────────────────────────
+// Templates are measured in inches from the sheet's top-left corner. Cells are
+// numbered row-major: left→right, then top→bottom, starting at 0.
+
+const LABEL_TEMPLATES = {
+  'avery-5263': {
+    id: 'avery-5263',
+    name: 'Avery 5263 / 5163 / 8163 — 2" × 4", 10 per sheet',
+    pageWidth: 8.5,
+    pageHeight: 11,
+    cols: 2,
+    rows: 5,
+    labelWidth: 4,
+    labelHeight: 2,
+    marginLeft: 0.15625,
+    marginTop: 0.5,
+    pitchX: 4.1875,   // label width + 3/16" gutter
+    pitchY: 2,        // rows butt together
+    cornerRadius: 0.0625,
+  },
+}
+
+app.get('/api/labels/templates', (req, res) => {
+  res.json(Object.values(LABEL_TEMPLATES))
+})
+
+const PT = 72 // PDF points per inch
+const MM = 72 / 25.4
+
+// Draws a QR code as vector rectangles (crisp at any printer DPI).
+// Horizontal runs of dark modules are merged to keep the PDF small.
+function drawQr(doc, text, x, y, size) {
+  const qr = QRCode.create(text, { errorCorrectionLevel: 'M' })
+  const n = qr.modules.size
+  const cell = size / n
+  for (let r = 0; r < n; r++) {
+    let c = 0
+    while (c < n) {
+      if (!qr.modules.get(r, c)) { c++; continue }
+      const start = c
+      while (c < n && qr.modules.get(r, c)) c++
+      // Tiny overlap avoids hairline gaps between modules in some PDF viewers
+      doc.rect(x + start * cell, y + r * cell, (c - start) * cell + 0.05, cell + 0.05)
+    }
+  }
+  doc.fill('#000000')
+}
+
+// Built-in PDF fonts only cover Latin-1; replace anything else so the
+// text renders instead of producing garbage glyphs.
+function pdfSafe(text) {
+  return String(text ?? '')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2013\u2014]/g, '-')
+    .replace(/[^\x20-\x7E\xA0-\xFF]/g, '')
+    .trim()
+}
+
+// Largest font size (max→min) at which `text` fits the box without breaking
+// any word mid-way. Returns { size, fits } — fits=false means use min + ellipsis.
+function fitText(doc, text, font, width, height, max, min, lineGap = 0) {
+  doc.font(font)
+  const words = text.split(/\s+/)
+  // pdfkit keeps the space after a word attached to it; if "word " is wider than
+  // the line, the space spills onto the next line as a stray indent. So measure
+  // words with their trailing space, against a slightly narrower box.
+  const fitWidth = width * 0.98
+  for (let size = max; size >= min; size -= 0.5) {
+    doc.fontSize(size)
+    const widest = Math.max(...words.map(w => doc.widthOfString(w + ' ')))
+    if (widest <= fitWidth && doc.heightOfString(text, { width: fitWidth, lineGap }) <= height) return { size, fits: true }
+  }
+  return { size: min, fits: false }
+}
+
+// Label layout (matches the agreed mock-up):
+//   ┌──────────────────────────────────────┐
+//   │ [QR]  Location Name                  │
+//   │──────────────────────────────────────│
+//   │ Notes / contents (location description)
+//   └──────────────────────────────────────┘
+// Without notes, the QR and name grow to fill the whole label.
+function drawLocationLabel(doc, t, x, y, loc, baseUrl) {
+  const W = t.labelWidth * PT
+  const H = t.labelHeight * PT
+  const pad = 0.1 * PT
+  const gap = 0.08 * PT
+  const shortId = loc.id.slice(0, 8)
+  const name = pdfSafe(loc.name) || 'Untitled'
+  // Keep line breaks the user typed; tidy everything else
+  const notes = String(loc.description ?? '')
+    .split(/\r?\n/).map(pdfSafe).join('\n').replace(/\n{3,}/g, '\n\n').trim()
+
+  const qrSize = notes ? 0.62 * PT : H - pad * 2
+  drawQr(doc, `${baseUrl}/l/${shortId}`, x + pad, y + pad, qrSize)
+
+  // Name: as big as fits beside the QR, vertically centred on it
+  const nx = x + pad + qrSize + gap
+  const nw = x + W - pad - nx
+  const { size: nameSize, fits: nameFits } = fitText(doc, name, 'Helvetica-Bold', nw, qrSize, notes ? 46 : 40, 12)
+  doc.font('Helvetica-Bold').fontSize(nameSize).fillColor('#000000')
+  const nameH = Math.min(doc.heightOfString(name, { width: nw, lineGap: 0 }), qrSize)
+  // Helvetica's line box has extra space below the baseline; nudge down a touch so caps look centred
+  const ny = y + pad + (qrSize - nameH) / 2 + nameSize * 0.06
+  doc.text(name, nx, ny, { width: nw, height: nameH + 1, lineGap: 0, ellipsis: !nameFits })
+
+  if (!notes) return
+
+  // Divider
+  const ry = y + pad + qrSize + gap
+  doc.moveTo(x + pad, ry).lineTo(x + W - pad, ry).lineWidth(1).strokeColor('#000000').stroke()
+
+  // Notes fill the rest of the label
+  const tx = x + pad
+  const ty = ry + gap
+  const tw = W - pad * 2
+  const th = y + H - pad - ty
+  const { size: noteSize, fits: notesFit } = fitText(doc, notes, 'Helvetica-Bold', tw, th, 16, 6, 0)
+  doc.font('Helvetica-Bold').fontSize(noteSize).fillColor('#000000')
+    .text(notes, tx, ty, { width: tw, height: th, lineGap: 0, ellipsis: !notesFit })
+}
+
+// Calibration cell: outline, centre crosshair, cell number
+function drawCalibrationCell(doc, t, x, y, index) {
+  const W = t.labelWidth * PT
+  const H = t.labelHeight * PT
+  doc.lineWidth(0.5).strokeColor('#000000')
+    .roundedRect(x, y, W, H, t.cornerRadius * PT).stroke()
+  const cx = x + W / 2
+  const cy = y + H / 2
+  doc.moveTo(cx - 12, cy).lineTo(cx + 12, cy).moveTo(cx, cy - 12).lineTo(cx, cy + 12).stroke()
+  doc.font('Helvetica').fontSize(9).fillColor('#000000')
+    .text(`#${index + 1}`, x + 8, y + 8, { lineBreak: false })
+}
+
+// POST /api/labels/pdf
+// { templateId, locationIds: string[], copies?: number, skip?: number[] (cells on
+//   the FIRST sheet already used), calibration?: boolean, outline?: boolean,
+//   baseUrl?: string }
+app.post('/api/labels/pdf', (req, res) => {
+  const body = req.body || {}
+  const t = LABEL_TEMPLATES[body.templateId]
+  if (!t) return res.status(400).json({ error: 'Unknown templateId' })
+
+  const perSheet = t.cols * t.rows
+  const skip = new Set((Array.isArray(body.skip) ? body.skip : [])
+    .map(Number).filter(n => Number.isInteger(n) && n >= 0 && n < perSheet))
+  const copies = Math.min(Math.max(parseInt(body.copies, 10) || 1, 1), 20)
+  const calibration = body.calibration === true
+  const outline = body.outline === true
+
+  // Expand selected locations (keeping the requested order) × copies
+  const all = db.prepare('SELECT * FROM locations').all()
+  const byId = new Map(all.map(l => [l.id, l]))
+  const ids = Array.isArray(body.locationIds) ? body.locationIds : []
+  const queue = []
+  for (const id of ids) {
+    const loc = byId.get(id)
+    if (loc) for (let i = 0; i < copies; i++) queue.push(loc)
+  }
+  if (!calibration && queue.length === 0) return res.status(400).json({ error: 'No valid locations selected' })
+  if (queue.length > 500) return res.status(400).json({ error: 'Too many labels (max 500)' })
+
+  const { labelOffsetXmm, labelOffsetYmm } = getSettings()
+  const ox = labelOffsetXmm * MM
+  const oy = labelOffsetYmm * MM
+  const baseUrl = resolveBaseUrl(req, body.baseUrl)
+
+  const doc = new PDFDocument({
+    size: [t.pageWidth * PT, t.pageHeight * PT],
+    margin: 0,
+    autoFirstPage: false,
+    info: { Title: calibration ? 'ScanBin alignment test' : 'ScanBin labels', Creator: 'ScanBin' },
+  })
+
+  res.setHeader('Content-Type', 'application/pdf')
+  res.setHeader('Content-Disposition', `inline; filename="${calibration ? 'alignment-test' : 'labels'}.pdf"`)
+  doc.pipe(res)
+
+  const cellOrigin = (i) => {
+    const col = i % t.cols
+    const row = Math.floor(i / t.cols)
+    return [
+      (t.marginLeft + col * t.pitchX) * PT + ox,
+      (t.marginTop + row * t.pitchY) * PT + oy,
+    ]
+  }
+
+  if (calibration) {
+    doc.addPage()
+    for (let i = 0; i < perSheet; i++) drawCalibrationCell(doc, t, ...cellOrigin(i), i)
+  } else {
+    let sheet = 0
+    while (queue.length) {
+      doc.addPage()
+      for (let i = 0; i < perSheet && queue.length; i++) {
+        if (sheet === 0 && skip.has(i)) continue
+        const [x, y] = cellOrigin(i)
+        if (outline) {
+          doc.lineWidth(0.3).strokeColor('#bbbbbb')
+            .roundedRect(x, y, t.labelWidth * PT, t.labelHeight * PT, t.cornerRadius * PT).stroke()
+        }
+        drawLocationLabel(doc, t, x, y, queue.shift(), baseUrl)
+      }
+      sheet++
+    }
+  }
+
+  doc.end()
 })
 
 // ── Frontend ──────────────────────────────────────────────────────────────────

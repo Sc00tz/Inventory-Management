@@ -56,3 +56,29 @@ export interface InventorySearchResult {
   brand: string | null
   imageUrl: string | null
 }
+
+/** App-wide settings stored server-side. */
+export interface Settings {
+  /** Address phones use to reach the server, baked into QR codes / NFC tags. Empty = use current browser address. */
+  publicBaseUrl: string
+  /** Printer nudge for label sheets, in millimetres (+X = right, +Y = down). */
+  labelOffsetXmm: number
+  labelOffsetYmm: number
+}
+
+/** A label sheet layout. All measurements in inches. */
+export interface LabelTemplate {
+  id: string
+  name: string
+  pageWidth: number
+  pageHeight: number
+  cols: number
+  rows: number
+  labelWidth: number
+  labelHeight: number
+  marginLeft: number
+  marginTop: number
+  pitchX: number
+  pitchY: number
+  cornerRadius: number
+}

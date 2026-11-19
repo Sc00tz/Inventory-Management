@@ -1,13 +1,14 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { Plus, ScanBarcode, ChevronRight, ChevronDown, Box, Home, Layers, Search, X } from 'lucide-react'
+import { Plus, ScanBarcode, ChevronRight, ChevronDown, Box, Home, Layers, Search, X, Nfc, Loader2 } from 'lucide-react'
 import { Archive, Refrigerator, Snowflake, Package2, BookOpen } from 'lucide-react'
 import { Button, toast } from '@blinkdotnew/ui'
 import { ScanInput } from '../components/ScanInput'
 import { LocationFormModal } from '../components/LocationFormModal'
 import { getLocations, getLocationByBarcode, getLocationByShortId, createLocation, getInventoryCounts, searchInventory } from '../lib/api'
 import type { Location, LocationType, InventorySearchResult } from '../types'
+import { nfcSupport, readNfcOnce, nfcErrorMessage } from '../lib/nfc'
 
 // Map of location type → icon component
 const TYPE_ICONS: Record<string, React.FC<{ size?: number; className?: string }>> = {
@@ -268,6 +269,39 @@ export function HomePage() {
     }
   }
 
+  // In-app NFC read (Android Chrome). Tags written by ScanBin hold the location's
+  // short link; a blank tag falls back to its serial number, which can be
+  // saved in a location's Barcode field to link that tag without writing it.
+  const [nfcReading, setNfcReading] = useState(false)
+  const nfcAbortRef = useRef<AbortController | null>(null)
+  useEffect(() => () => nfcAbortRef.current?.abort(), [])
+  const canReadNfc = nfcSupport().ok
+
+  const handleNfcRead = async () => {
+    if (nfcReading) {
+      nfcAbortRef.current?.abort()
+      return
+    }
+    const ctrl = new AbortController()
+    nfcAbortRef.current = ctrl
+    setNfcReading(true)
+    try {
+      const { value, serialNumber } = await readNfcOnce(ctrl.signal)
+      if (navigator.vibrate) navigator.vibrate(60)
+      if (value) await handleScan(value)
+      else if (serialNumber) {
+        const loc = await getLocationByBarcode(serialNumber)
+        if (loc) navigate({ to: '/locations/$id', params: { id: loc.id } as never })
+        else toast('Blank tag', { description: `Serial ${serialNumber}. Write it from a location page, or paste this serial into a location's "Barcode or NFC tag serial" field (Edit location).` })
+      }
+    } catch (e) {
+      if ((e as Error)?.name !== 'AbortError') toast.error(nfcErrorMessage(e))
+    } finally {
+      ctrl.abort()
+      setNfcReading(false)
+    }
+  }
+
   const toggleExpanded = (id: string) => {
     setExpanded(prev => {
       const next = new Set(prev)
@@ -315,6 +349,14 @@ export function HomePage() {
         <div className="flex items-center gap-2 mb-3">
           <ScanBarcode size={16} className="text-primary" />
           <span className="text-sm font-medium text-foreground">Scan a Location</span>
+          {canReadNfc && (
+            <button
+              onClick={handleNfcRead}
+              className="ml-auto flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors font-medium"
+            >
+              {nfcReading ? <><Loader2 size={13} className="animate-spin" /> Hold tag to phone… (tap to cancel)</> : <><Nfc size={13} /> Tap NFC tag</>}
+            </button>
+          )}
         </div>
         <ScanInput onScan={handleScan} placeholder="Scan location barcode to open…" autoFocus closeOnScan />
         <p className="text-xs text-muted-foreground mt-2">Barcode scanners send Enter automatically. Or type and press Enter.</p>
