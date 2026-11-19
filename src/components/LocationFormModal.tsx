@@ -50,6 +50,7 @@ export function LocationFormModal({ open, location, locations = [], onSave, onCl
   const [name, setName] = useState('')
   const [type, setType] = useState('bin')
   const [description, setDescription] = useState('')
+  const [barcode, setBarcode] = useState('')
   const [color, setColor] = useState(COLORS[0])
   const [parentId, setParentId] = useState<string | null>(null)
   const [addingType, setAddingType] = useState(false)
@@ -61,12 +62,14 @@ export function LocationFormModal({ open, location, locations = [], onSave, onCl
       setName(location.name)
       setType(location.type)
       setDescription(location.description || '')
+      setBarcode(location.barcode || '')
       setColor(location.color || COLORS[0])
       setParentId(location.parentId ?? null)
     } else {
       setName('')
       setType('bin')
       setDescription('')
+      setBarcode('')
       setColor(COLORS[0])
       setParentId(null)
     }
@@ -90,7 +93,7 @@ export function LocationFormModal({ open, location, locations = [], onSave, onCl
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim()) return
-    onSave({ name: name.trim(), type, barcode: '', description: description.trim(), color, parentId })
+    onSave({ name: name.trim(), type, barcode: barcode.trim(), description: description.trim(), color, parentId })
   }
 
   const parentOptions = flattenTree(locations, location?.id)
@@ -189,14 +192,26 @@ export function LocationFormModal({ open, location, locations = [], onSave, onCl
             </div>
           )}
 
-          {/* Description */}
+          {/* Notes — shown on the location page and printed on its label */}
           <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Description (optional)</label>
-            <input
+            <label className="text-xs text-muted-foreground mb-1 block">Notes / contents (optional, printed on label)</label>
+            <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
-              placeholder="e.g. Under stairs, left side"
+              rows={3}
+              className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary resize-y"
+              placeholder="e.g. Dog treats, chicken toppers"
+            />
+          </div>
+
+          {/* Barcode / tag ID — scanning this value on the home page opens the location */}
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Barcode or NFC tag serial (optional)</label>
+            <input
+              value={barcode}
+              onChange={(e) => setBarcode(e.target.value)}
+              className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm font-mono text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+              placeholder="Scan or paste — opens this location when scanned"
             />
           </div>
 

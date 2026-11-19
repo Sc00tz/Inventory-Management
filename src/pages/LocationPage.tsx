@@ -1,13 +1,15 @@
 import { useState, Fragment, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, useNavigate } from '@tanstack/react-router'
-import { ArrowLeft, Plus, Minus, Trash2, Edit2, ScanBarcode, Package, QrCode, Copy, Check, ChevronRight, Box, Home, Layers } from 'lucide-react'
+import { ArrowLeft, Plus, Minus, Trash2, Edit2, ScanBarcode, Package, QrCode, Copy, Check, ChevronRight, Box, Home, Layers, Printer, AlertTriangle } from 'lucide-react'
 import { Archive, Refrigerator, Snowflake, Package2, BookOpen } from 'lucide-react'
 import { Button, toast } from '@blinkdotnew/ui'
 import { ScanInput } from '../components/ScanInput'
 import { AddProductModal } from '../components/AddProductModal'
 import { AddItemModal } from '../components/AddItemModal'
 import { LocationFormModal } from '../components/LocationFormModal'
+import { NfcWriter } from '../components/NfcWriter'
+import { useSettings, resolveBaseUrl, locationShortUrl, isLocalOnly } from '../lib/settings'
 import {
   getLocation,
   getLocations,
@@ -70,8 +72,11 @@ export function LocationPage() {
   const [copied, setCopied] = useState(false)
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Short URL for this location — used in the QR code and copy button
-  const locationUrl = typeof window !== 'undefined' ? `${window.location.origin}/l/${id.slice(0, 8)}` : ''
+  // Short URL for this location — used in the QR code, NFC tag and copy button.
+  // Uses the configured public address so phones can open it.
+  const { data: settings } = useSettings()
+  const locationUrl = locationShortUrl(resolveBaseUrl(settings?.publicBaseUrl), id)
+  const urlIsLocalOnly = isLocalOnly(locationUrl)
 
   // Clear the copy-feedback timer on unmount to avoid a setState on an unmounted component
   useEffect(() => () => { if (copyTimerRef.current) clearTimeout(copyTimerRef.current) }, [])
@@ -268,7 +273,7 @@ export function LocationPage() {
             <h1 className="text-xl font-semibold text-foreground truncate">{location.name}</h1>
           </div>
           {location.description && (
-            <p className="text-sm text-muted-foreground mt-0.5 ml-10">{location.description}</p>
+            <p className="text-sm text-muted-foreground mt-0.5 ml-10 whitespace-pre-line">{location.description}</p>
           )}
         </div>
         <div className="flex gap-1 shrink-0">
@@ -298,6 +303,23 @@ export function LocationPage() {
             <img src={`/api/qr?url=${encodeURIComponent(locationUrl)}`} alt="QR code" width={160} height={160} />
           </div>
           <p className="text-xs text-muted-foreground text-center">Scan to open this location directly</p>
+          {urlIsLocalOnly && (
+            <p className="flex gap-1.5 text-xs text-amber-500">
+              <AlertTriangle size={13} className="shrink-0 mt-px" />
+              This link uses localhost, which phones can't open. Set a public address in Settings first.
+            </p>
+          )}
+          <div className="flex flex-col gap-3 border-t border-border pt-3">
+            <Button
+              variant="outline"
+              size="sm"
+              className="self-start"
+              onClick={() => navigate({ to: '/labels', search: { ids: id } })}
+            >
+              <Printer size={14} className="mr-1.5" /> Print label
+            </Button>
+            <NfcWriter url={locationUrl} />
+          </div>
         </div>
       )}
 

@@ -1,4 +1,4 @@
-import type { Location, Product, InventoryItem, InventoryWithProduct, InventorySearchResult } from '../types'
+import type { Location, Product, InventoryItem, InventoryWithProduct, InventorySearchResult, Settings, LabelTemplate } from '../types'
 
 const BASE = '/api'
 
@@ -119,4 +119,53 @@ export async function lookupBarcode(barcode: string): Promise<OFFProduct | null>
   } catch {
     return null
   }
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+
+export function getSettings(): Promise<Settings> {
+  return req('GET', '/settings')
+}
+
+export async function updateSettings(data: Partial<Settings>): Promise<Settings> {
+  const res = await fetch(`${BASE}/settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  const json = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(json.error || `PUT /settings → ${res.status}`)
+  return json
+}
+
+// ── Labels ────────────────────────────────────────────────────────────────────
+
+export function getLabelTemplates(): Promise<LabelTemplate[]> {
+  return req('GET', '/labels/templates')
+}
+
+export interface LabelPdfRequest {
+  templateId: string
+  locationIds?: string[]
+  copies?: number
+  /** Cell indices on the first sheet that are already used */
+  skip?: number[]
+  /** Print outlines + crosshairs only, for lining up the printer */
+  calibration?: boolean
+  /** Draw faint label outlines (handy when test-printing on plain paper) */
+  outline?: boolean
+  baseUrl?: string
+}
+
+export async function generateLabelsPdf(body: LabelPdfRequest): Promise<Blob> {
+  const res = await fetch(`${BASE}/labels/pdf`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}))
+    throw new Error(json.error || `Label PDF failed (${res.status})`)
+  }
+  return res.blob()
 }
